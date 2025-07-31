@@ -128,6 +128,6 @@ def crawl_images(start_url, max_pages=1000):
                 json.dump(face_db, f, indent=2)
 
 if __name__ == "__main__":
-    start_url = "https://www.imdb.com/list/ls524618334/"  # Hier deine Startseite eintragen
+    start_url = "https://de.wikipedia.org/wiki/Elon_Musk"  # Hier deine Startseite eintragen
     crawl_images(start_url, max_pages=100)  # max_pages anpassen
     
