@@ -44,7 +44,7 @@ if uploaded_file:
     if not encodings:
         st.warning("❌ Kein Gesicht im Bild erkannt.")
     else:
-        st.image(uploaded_file, caption="Hochgeladenes Bild", use_column_width=True)
+        st.image(uploaded_file, caption="Hochgeladenes Bild", use_container_width=True)
         st.info("🔎 Suche nach ähnlichen Gesichtern...")
         db = load_database()
         results = find_matches(encodings[0], db)
