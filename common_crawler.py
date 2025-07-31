@@ -7,6 +7,7 @@ from collections import deque
 from io import BytesIO
 from PIL import Image
 import imagehash
+from warcio.archiveiterator import ArchiveIterator
 
 visited_pages = set()
 
@@ -17,13 +18,45 @@ with open("face_embeddings.json", "r") as f:
         print("Fehler beim Laden der Gesichts-Datenbank. Stelle sicher, dass die Datei korrekt formatiert ist.")
         face_db = []
 
+# --- Common Crawl Einstellungen ---
+CC_SERVER = 'http://index.commoncrawl.org/'
+CC_INDEX = 'CC-MAIN-2025-30'  # Aktuellsten Index anpassen
+CC_USER_AGENT = {'User-Agent': 'cc-get-started/1.0 (deinname@example.com)'}
+
 def is_internal_link(base_url, link):
     base_domain = urllib.parse.urlparse(base_url).netloc
     link_domain = urllib.parse.urlparse(link).netloc
     return base_domain == link_domain or link_domain == ""
 
+def search_cc_index(url):
+    encoded_url = urllib.parse.quote_plus(url)
+    index_url = f'{CC_SERVER}{CC_INDEX}-index?url={encoded_url}&output=json'
+    try:
+        resp = requests.get(index_url, headers=CC_USER_AGENT, timeout=15)
+        if resp.status_code == 200:
+            records = resp.text.strip().split('\n')
+            return [json.loads(r) for r in records]
+    except Exception as e:
+        print(f"Fehler bei Common Crawl Index Suche für {url}: {e}")
+    return []
+
+def fetch_page_from_cc(records):
+    for record in records:
+        offset, length = int(record['offset']), int(record['length'])
+        s3_url = f'https://data.commoncrawl.org/{record["filename"]}'
+        byte_range = f'bytes={offset}-{offset+length-1}'
+        try:
+            resp = requests.get(s3_url, headers={**CC_USER_AGENT, 'Range': byte_range}, stream=True, timeout=20)
+            if resp.status_code == 206:
+                stream = ArchiveIterator(resp.raw)
+                for warc_record in stream:
+                    if warc_record.rec_type == 'response':
+                        return warc_record.content_stream().read()
+        except Exception as e:
+            print(f"Fehler beim Laden der Seite aus Common Crawl: {e}")
+    return None
+
 def download_image(img_url):
-    # Nur kompatible Bildformate zulassen
     allowed_exts = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
     if not any(img_url.lower().endswith(ext) for ext in allowed_exts):
         print(f"Überspringe inkompatibles Bildformat: {img_url}")
@@ -76,7 +109,7 @@ def str_to_phash(phash_str):
 def compare_hashes(phash):
     for entry in face_db:
         existing_phash = str_to_phash(entry["phash"])
-        if existing_phash and existing_phash - phash < 5:  # Toleranzwert für Ähnlichkeit
+        if existing_phash and existing_phash - phash < 5:
             return True
     return False
 
@@ -89,17 +122,24 @@ def crawl_images(start_url, max_pages=1000):
         print(f"Crawle Seite: {url} ({len(visited_pages)+1}/{max_pages})")
         visited_pages.add(url)
 
-        try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
-            }
-            resp = requests.get(url, timeout=10, headers=headers)
-            resp.raise_for_status()
-        except Exception as e:
-            print(f"Fehler beim Laden der Seite {url}: {e}")
+        # Suche Seite im Common Crawl Index
+        records = search_cc_index(url)
+        if not records:
+            print(f"Keine Daten für {url} im Common Crawl gefunden.")
             continue
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        # Lade Seite von Common Crawl
+        page_bytes = fetch_page_from_cc(records)
+        if not page_bytes:
+            print(f"Seite {url} konnte nicht geladen werden.")
+            continue
+
+        # Parse HTML mit BeautifulSoup
+        try:
+            soup = BeautifulSoup(page_bytes, "html.parser")
+        except Exception as e:
+            print(f"Fehler beim Parsen der Seite {url}: {e}")
+            continue
 
         # Bilder finden und herunterladen
         images = soup.find_all("img")
@@ -116,18 +156,17 @@ def crawl_images(start_url, max_pages=1000):
             if image_bytes and bild_bytes_enthält_gesicht(image) and not compare_hashes(get_phash(image_bytes)):
                 process_image(image, image_bytes, img_url, url)
 
-        # Interne Links sammeln
+        # Interne Links sammeln und hinzufügen
         links = soup.find_all("a", href=True)
         for link in links:
             next_url = urllib.parse.urljoin(url, link['href'])
             if is_internal_link(start_url, next_url) and next_url not in visited_pages:
                 queue.append(next_url)
-        
+
         # Ergebnisse speichern
         with open("face_embeddings.json", "w") as f:
-                json.dump(face_db, f, indent=2)
+            json.dump(face_db, f, indent=2)
 
 if __name__ == "__main__":
-    start_url = "https://www.imdb.com/list/ls524618334/"  # Hier deine Startseite eintragen
+    start_url = "https://www.imdb.com/list/ls524618334/"  # Deine Startseite
     crawl_images(start_url, max_pages=100)  # max_pages anpassen
-    

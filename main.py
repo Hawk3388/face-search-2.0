@@ -12,7 +12,7 @@ def load_database(path="face_embeddings.json"):
         return json.load(f)
 
 # Vergleiche Embedding mit allen bekannten
-def find_matches(query_embedding, db, tolerance=0.6):
+def find_matches(query_embedding, db, tolerance=0.55):
     matches = []
     for entry in db:
         db_embedding = np.array(entry["embedding"])
