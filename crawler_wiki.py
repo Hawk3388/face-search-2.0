@@ -235,16 +235,42 @@ def get_current_category_page_url():
                         print(f"✓ Letzte Seite gefunden auf Kategorie-Seite: {category_url}")
                         return category_url
             
-            # Zur nächsten Kategorie-Seite
+            # Zur nächsten Kategorie-Seite (robuste Suche)
             next_page_link = None
+            
+            # Methode 1: Suche nach "(next page)" Link
             next_links = soup.find_all("a", string=lambda text: text and text.strip() == "(next page)")
             if next_links:
                 next_page_link = next_links[0]
             
+            # Methode 2: Fallback - Suche nach Link mit "next" Text  
+            if not next_page_link:
+                all_links = soup.find_all("a", href=True)
+                for link in all_links:
+                    link_text = link.get_text().strip().lower()
+                    if "next page" in link_text or link_text == "next":
+                        next_page_link = link
+                        break
+            
+            # Methode 3: Suche nach pagefrom Parameter in URLs
+            if not next_page_link:
+                pagefrom_links = soup.find_all("a", href=lambda x: x and "pagefrom=" in x)
+                if pagefrom_links:
+                    # Filtere Links die nach der aktuellen Seite kommen
+                    for link in pagefrom_links:
+                        if "(next page)" in str(link.parent) or "next" in link.get_text().lower():
+                            next_page_link = link
+                            break
+                    # Falls kein expliziter "next" Text, nimm den ersten pagefrom Link
+                    if not next_page_link and pagefrom_links:
+                        next_page_link = pagefrom_links[0]
+            
             if next_page_link and next_page_link.get('href'):
                 category_url = urllib.parse.urljoin("https://en.wikipedia.org", next_page_link['href'])
                 pages_searched += 1
+                print(f"    Suche weiter auf nächster Kategorie-Seite ({pages_searched})")
             else:
+                print(f"    Keine weitere Kategorie-Seite gefunden nach {pages_searched} Seiten")
                 break
                 
         except Exception as e:
@@ -275,15 +301,60 @@ def get_articles_from_single_category_page(category_url):
                 article_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
                 page_articles.append(article_url)
         
-        # Nächste Kategorie-Seiten-URL finden
+        # Nächste Kategorie-Seiten-URL finden (robuste Suche)
         next_category_url = None
+        
+        # Methode 1: Suche nach "(next page)" Link
         next_links = soup.find_all("a", string=lambda text: text and text.strip() == "(next page)")
         if next_links:
             next_page_link = next_links[0]
             if next_page_link.get('href'):
                 next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", next_page_link['href'])
+                print(f"    Next-Page Link gefunden: {next_page_link.get('href')}")
         
-        print(f"✓ {len(page_articles)} Artikel von dieser Kategorie-Seite geladen")
+        # Methode 2: Fallback - Suche nach Link mit "next" Text  
+        if not next_category_url:
+            all_links = soup.find_all("a", href=True)
+            for link in all_links:
+                link_text = link.get_text().strip().lower()
+                if "next page" in link_text or link_text == "next":
+                    next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
+                    print(f"    Fallback Next-Link gefunden: {link['href']}")
+                    break
+        
+        # Methode 3: Suche nach pagefrom Parameter in URLs
+        if not next_category_url:
+            pagefrom_links = soup.find_all("a", href=lambda x: x and "pagefrom=" in x)
+            if pagefrom_links:
+                # Filtere Links die nach der aktuellen Seite kommen
+                for link in pagefrom_links:
+                    if "(next page)" in str(link.parent) or "next" in link.get_text().lower():
+                        next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
+                        print(f"    Pagefrom Next-Link gefunden: {link['href']}")
+                        break
+                # Falls kein expliziter "next" Text, nimm den ersten pagefrom Link
+                if not next_category_url and pagefrom_links:
+                    next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", pagefrom_links[0]['href'])
+                    print(f"    Erster Pagefrom-Link gefunden: {pagefrom_links[0]['href']}")
+        
+        # Methode 4: Suche in Navigation-Elementen
+        if not next_category_url:
+            nav_elements = soup.find_all(['div', 'span'], class_=lambda x: x and ('mw-category-group' in x or 'pager' in x))
+            for nav in nav_elements:
+                links = nav.find_all("a", href=True)
+                for link in links:
+                    if "pagefrom=" in link.get('href', ''):
+                        next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
+                        print(f"    Navigation Next-Link gefunden: {link['href']}")
+                        break
+                if next_category_url:
+                    break
+        
+        if next_category_url:
+            print(f"✓ {len(page_articles)} Artikel von dieser Kategorie-Seite geladen, nächste Seite verfügbar")
+        else:
+            print(f"✓ {len(page_articles)} Artikel von dieser Kategorie-Seite geladen, keine weitere Seite gefunden")
+        
         return page_articles, next_category_url
         
     except Exception as e:
