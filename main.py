@@ -39,7 +39,7 @@ if uploaded_file:
     else:
         image = face_recognition.load_image_file(uploaded_file)
 
-    encodings = face_recognition.face_encodings(image)
+    encodings = face_recognition.face_encodings(image, model="large")
 
     if not encodings:
         st.warning("❌ Kein Gesicht im Bild erkannt.")

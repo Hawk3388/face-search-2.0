@@ -1,3 +1,15 @@
+import os
+# CUDA-Pfade für dlib/face_recognition setzen
+cuda_path = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1"
+cudnn_path = r"C:\Program Files\NVIDIA\CUDNN\v9.6\bin\12.6"
+
+# CUDA-Bibliotheken zum PATH hinzufügen
+if os.path.exists(cuda_path):
+    os.environ['PATH'] = cuda_path + r'\bin;' + os.environ.get('PATH', '')
+
+if os.path.exists(cudnn_path):
+    os.environ['PATH'] = cudnn_path + ';' + os.environ.get('PATH', '')
+
 import requests
 from bs4 import BeautifulSoup
 import face_recognition
@@ -10,17 +22,57 @@ import imagehash
 
 visited_pages = set()
 
-with open("face_embeddings.json", "r") as f:
-    try:
+# Gesichts-Datenbank laden oder erstellen
+try:
+    with open("face_embeddings.json", "r") as f:
         face_db = json.load(f)
-    except json.JSONDecodeError:
-        print("Fehler beim Laden der Gesichts-Datenbank. Stelle sicher, dass die Datei korrekt formatiert ist.")
-        face_db = []
+except FileNotFoundError:
+    print("face_embeddings.json nicht gefunden. Erstelle neue Datenbank.")
+    face_db = []
+except json.JSONDecodeError:
+    print("Fehler beim Laden der Gesichts-Datenbank. Stelle sicher, dass die Datei korrekt formatiert ist.")
+    face_db = []
 
 def is_internal_link(base_url, link):
     base_domain = urllib.parse.urlparse(base_url).netloc
     link_domain = urllib.parse.urlparse(link).netloc
-    return base_domain == link_domain or link_domain == ""
+    
+    # Vollständige URLs für Vergleich erstellen
+    full_link = urllib.parse.urljoin(base_url, link)
+    
+    # URLs ohne Fragment (Teil nach #) für Vergleich
+    base_parsed = urllib.parse.urlparse(base_url)
+    link_parsed = urllib.parse.urlparse(full_link)
+    
+    base_path = base_parsed.path
+    link_path = link_parsed.path
+    
+    # Self-Links ausschließen (Links die auf die gleiche Seite zeigen, auch mit #-Ankern)
+    if base_path == link_path:
+        return False
+    
+    # Prüfen ob es sich um Wikipedia handelt
+    if "wikipedia.org" in base_domain:
+        # Für Wikipedia: nur Links zu anderen Wikipedia-Artikeln erlauben
+        if link_domain == "" or link_domain == base_domain:
+            # Prüfen ob es ein Wikipedia-Artikel ist (nicht Talk, User, Special, etc.)
+            path = link_path
+            
+            # Wikipedia-Artikel haben das Format /wiki/Artikelname
+            if path.startswith("/wiki/") and ":" not in path.split("/wiki/")[1]:
+                # Ausschließen von speziellen Seiten
+                excluded_prefixes = [
+                    "Category:", "File:", "Template:", "Help:", "Special:", 
+                    "User:", "Talk:", "User_talk:", "Wikipedia:", "MediaWiki:",
+                    "Portal:", "Draft:", "Module:"
+                ]
+                article_name = path.split("/wiki/")[1]
+                if not any(article_name.startswith(prefix) for prefix in excluded_prefixes):
+                    return True
+            return False
+    else:
+        # Für andere Domains: normale Domain-Prüfung
+        return base_domain == link_domain or link_domain == ""
 
 def download_image(img_url):
     # Nur kompatible Bildformate zulassen
@@ -29,7 +81,11 @@ def download_image(img_url):
         print(f"Überspringe inkompatibles Bildformat: {img_url}")
         return None
     try:
-        response = requests.get(img_url, timeout=10)
+        # Gleichen User-Agent wie beim Crawlen verwenden
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+        }
+        response = requests.get(img_url, timeout=10, headers=headers)
         response.raise_for_status()
         return response.content
     except Exception as e:
@@ -38,7 +94,7 @@ def download_image(img_url):
 
 def process_image(image, image_bytes, img_url, page_url):
     try:
-        encodings = face_recognition.face_encodings(image)
+        encodings = face_recognition.face_encodings(image, model="large")
         if encodings:
             phash = get_phash(image_bytes)
             embedding = encodings[0].tolist()
@@ -128,6 +184,6 @@ def crawl_images(start_url, max_pages=1000):
                 json.dump(face_db, f, indent=2)
 
 if __name__ == "__main__":
-    start_url = "https://de.wikipedia.org/wiki/Elon_Musk"  # Hier deine Startseite eintragen
+    start_url = "https://en.wikipedia.org/wiki/Barack_Obama"  # Hier deine Startseite eintragen
     crawl_images(start_url, max_pages=100)  # max_pages anpassen
     
