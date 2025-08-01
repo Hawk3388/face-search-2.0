@@ -19,8 +19,27 @@ from collections import deque
 from io import BytesIO
 from PIL import Image
 import imagehash
+import shutil
 
 visited_pages = set()
+
+def create_backup():
+    """Erstellt eine Sicherheitskopie der face_embeddings.json Datei"""
+    db_file = "face_embeddings.json"
+    if os.path.exists(db_file):
+        # Zeitstempel für Backup-Namen
+        backup_file = f"face_embeddings_backup.json"
+        
+        try:
+            shutil.copy2(db_file, backup_file)
+            print(f"Sicherheitskopie erstellt: {backup_file}")
+        except Exception as e:
+            print(f"Fehler beim Erstellen der Sicherheitskopie: {e}")
+    else:
+        print("Keine bestehende Datenbank gefunden - keine Sicherheitskopie erstellt.")
+
+# Sicherheitskopie beim Start erstellen
+create_backup()
 
 # Gesichts-Datenbank laden oder erstellen
 try:
@@ -80,6 +99,9 @@ def download_image(img_url):
     if not any(img_url.lower().endswith(ext) for ext in allowed_exts):
         print(f"Überspringe inkompatibles Bildformat: {img_url}")
         return None
+    if ".svg" in img_url.lower():
+        print(f"Überspringe inkompatibles Bildformat: {img_url}")
+        return None
     try:
         # Gleichen User-Agent wie beim Crawlen verwenden
         headers = {
@@ -136,12 +158,31 @@ def compare_hashes(phash):
             return True
     return False
 
+def get_len_images(db):
+    """Gibt die Anzahl der Bilder in der Datenbank zurück."""
+    return len(db)
+
+def is_page_already_crawled(page_url):
+    """Prüft ob eine Seite bereits gecrawlt wurde anhand der page_url in der Datenbank."""
+    for entry in face_db:
+        if entry.get("page_url") == page_url:
+            return True
+    return False
+
 def crawl_images(start_url, max_pages=1000):
+    old_db_len = get_len_images(face_db)
     queue = deque([start_url])
     while queue and len(visited_pages) < max_pages:
         url = queue.popleft()
         if url in visited_pages:
             continue
+        
+        # Prüfen ob diese Seite bereits gecrawlt wurde (basierend auf der Datenbank)
+        if is_page_already_crawled(url):
+            print(f"Seite bereits gecrawlt (überspringe): {url}")
+            visited_pages.add(url)
+            continue
+            
         print(f"Crawle Seite: {url} ({len(visited_pages)+1}/{max_pages})")
         visited_pages.add(url)
 
@@ -169,8 +210,13 @@ def crawl_images(start_url, max_pages=1000):
             if not image_bytes:
                 continue
             image = face_recognition.load_image_file(BytesIO(image_bytes))
-            if image_bytes and bild_bytes_enthält_gesicht(image) and not compare_hashes(get_phash(image_bytes)):
-                process_image(image, image_bytes, img_url, url)
+            if bild_bytes_enthält_gesicht(image):
+                if not compare_hashes(get_phash(image_bytes)):
+                    process_image(image, image_bytes, img_url, url)
+                else:
+                    print(f"Bild bereits vorhanden: {img_url}")
+            else:
+                print(f"Kein Gesicht gefunden: {img_url}")
 
         # Interne Links sammeln
         links = soup.find_all("a", href=True)
@@ -183,7 +229,9 @@ def crawl_images(start_url, max_pages=1000):
         with open("face_embeddings.json", "w") as f:
                 json.dump(face_db, f, indent=2)
 
+    print(f"Insgesamt sind {get_len_images(face_db)} Bilder in der Datenbank, davon wurden {get_len_images(face_db) - old_db_len} neue Bilder gespeichert.")
+
 if __name__ == "__main__":
-    start_url = "https://en.wikipedia.org/wiki/Barack_Obama"  # Hier deine Startseite eintragen
+    start_url = input("Start url: ")  # Hier deine Startseite eintragen
     crawl_images(start_url, max_pages=100)  # max_pages anpassen
     
