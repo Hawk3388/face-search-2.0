@@ -20,8 +20,47 @@ from io import BytesIO
 from PIL import Image
 import imagehash
 import shutil
+import signal
+import sys
 
-visited_pages = set()
+queue = deque()  # Globale Queue für Signal-Handler
+
+def save_database():
+    """Speichert die Gesichts-Datenbank in die JSON-Datei."""
+    try:
+        with open("face_embeddings.json", "w") as f:
+            json.dump(face_db, f, indent=2)
+        print("Datenbank erfolgreich gespeichert.")
+    except Exception as e:
+        print(f"Fehler beim Speichern der Datenbank: {e}")
+
+def get_visited_pages_from_db():
+    """Extrahiert alle bereits besuchten Seiten aus der Datenbank."""
+    visited_pages = set()
+    for entry in face_db:
+        page_url = entry.get("page_url")
+        if page_url:
+            visited_pages.add(page_url)
+    return visited_pages
+
+def get_last_crawled_page():
+    """Gibt die letzte gecrawlte Seite zurück."""
+    if not face_db:
+        return None
+    # Das letzte Element in der Datenbank ist die zuletzt bearbeitete Seite
+    last_entry = face_db[-1]
+    return last_entry.get("page_url")
+
+def signal_handler(sig, frame):
+    """Handler für Unterbrechungssignale (Ctrl+C)."""
+    print("\nUnterbrechung erkannt! Speichere Datenbank...")
+    save_database()
+    print("Crawler beendet.")
+    sys.exit(0)
+
+# Signal-Handler registrieren
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 def create_backup():
     """Erstellt eine Sicherheitskopie der face_embeddings.json Datei"""
@@ -51,56 +90,6 @@ except FileNotFoundError:
 except json.JSONDecodeError:
     print("Fehler beim Laden der Gesichts-Datenbank. Stelle sicher, dass die Datei korrekt formatiert ist.")
     face_db = []
-
-def is_person_article(url):
-    """Prüft ob ein Wikipedia-Artikel wahrscheinlich über eine Person ist."""
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
-        }
-        resp = requests.get(url, timeout=10, headers=headers)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-        
-        # Indikatoren für Personenartikel
-        person_indicators = [
-            # Kategorien
-            "Category:Living people", "Category:People", "Category:Births", "Category:Deaths",
-            "Category:American people", "Category:British people", "Category:German people",
-            "Category:Politicians", "Category:Actors", "Category:Musicians", "Category:Athletes",
-            "Category:Scientists", "Category:Writers", "Category:Artists", "Category:Presidents",
-            
-            # Text-Indikatoren
-            "born", "died", "birth", "death", "married", "spouse", "children",
-            "early life", "personal life", "career", "education", "biography"
-        ]
-        
-        # Infobox prüfen - Personen haben oft spezielle Infoboxen
-        infobox = soup.find("table", class_=lambda x: x and "infobox" in x.lower())
-        if infobox:
-            infobox_text = infobox.get_text().lower()
-            if any(indicator in infobox_text for indicator in ["born", "died", "birth", "occupation", "spouse"]):
-                return True
-        
-        # Kategorien prüfen
-        categories = soup.find_all("a", href=lambda x: x and "/wiki/Category:" in x)
-        for cat in categories:
-            cat_text = cat.get_text().lower()
-            if any(indicator.lower() in cat_text for indicator in person_indicators):
-                return True
-        
-        # Seiteninhalt prüfen
-        content = soup.find("div", {"id": "mw-content-text"})
-        if content:
-            content_text = content.get_text().lower()
-            person_count = sum(1 for indicator in person_indicators if indicator.lower() in content_text)
-            if person_count >= 3:  # Mindestens 3 Indikatoren müssen vorhanden sein
-                return True
-        
-        return False
-    except Exception as e:
-        print(f"Fehler beim Prüfen des Artikels {url}: {e}")
-        return False
 
 def is_internal_link(base_url, link):
     base_domain = urllib.parse.urlparse(base_url).netloc
@@ -212,76 +201,94 @@ def get_len_images(db):
     """Gibt die Anzahl der Bilder in der Datenbank zurück."""
     return len(db)
 
-def get_person_articles_from_categories():
-    """Sammelt Wikipedia-Artikel von Personen aus bekannten Kategorien."""
-    person_categories = [
-        "https://en.wikipedia.org/wiki/Category:Living_people",
-    ]
+def get_current_category_page_url():
+    """Findet die aktuelle Kategorie-Seiten-URL basierend auf der letzten bearbeiteten Seite."""
+    last_page = get_last_crawled_page()
     
-    person_articles = []
+    if not last_page:
+        # Wenn keine letzte Seite, starte mit der ersten Kategorie-Seite
+        return "https://en.wikipedia.org/wiki/Category:Living_people"
     
-    for category_url in person_categories:
+    # Versuche die Kategorie-Seite zu finden, auf der sich die letzte Seite befindet
+    print(f"Suche Kategorie-Seite für letzte bearbeitete Seite: {last_page}")
+    
+    category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
+    pages_searched = 0
+    max_search_pages = 50  # Begrenzte Suche um nicht ewig zu suchen
+    
+    while category_url and pages_searched < max_search_pages:
         try:
-            print(f"Durchsuche Kategorie: {category_url}")
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+            }
+            resp = requests.get(category_url, timeout=10, headers=headers)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
             
-            # Mehrere Seiten der Kategorie durchsuchen
-            current_url = category_url
-            pages_crawled = 0
-            max_pages_per_category = 3  # Maximal 3 Seiten pro Kategorie
+            # Artikel auf dieser Seite sammeln
+            content_div = soup.find("div", {"id": "mw-content-text"})
+            if content_div:
+                links = content_div.find_all("a", href=lambda x: x and x.startswith("/wiki/") and ":" not in x.split("/wiki/")[1])
+                for link in links:
+                    article_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
+                    if article_url == last_page:
+                        print(f"✓ Letzte Seite gefunden auf Kategorie-Seite: {category_url}")
+                        return category_url
             
-            while current_url and pages_crawled < max_pages_per_category:
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
-                }
-                resp = requests.get(current_url, timeout=10, headers=headers)
-                resp.raise_for_status()
-                soup = BeautifulSoup(resp.text, "html.parser")
+            # Zur nächsten Kategorie-Seite
+            next_page_link = None
+            next_links = soup.find_all("a", string=lambda text: text and text.strip() == "(next page)")
+            if next_links:
+                next_page_link = next_links[0]
+            
+            if next_page_link and next_page_link.get('href'):
+                category_url = urllib.parse.urljoin("https://en.wikipedia.org", next_page_link['href'])
+                pages_searched += 1
+            else:
+                break
                 
-                # Links zu Personen-Artikeln sammeln
-                content_div = soup.find("div", {"id": "mw-content-text"})
-                if content_div:
-                    links = content_div.find_all("a", href=lambda x: x and x.startswith("/wiki/") and ":" not in x.split("/wiki/")[1])
-                    page_articles = 0
-                    for link in links:
-                        article_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
-                        if article_url not in person_articles:
-                            person_articles.append(article_url)
-                            page_articles += 1
-                    
-                    print(f"  Seite {pages_crawled + 1}: {page_articles} Artikel gefunden")
-                
-                # Nach "next page" Link suchen
-                next_page_link = None
-                nav_links = soup.find_all("a", string=lambda text: text and "next" in text.lower())
-                if not nav_links:
-                    # Alternative: Suche nach numerischen Seitenzahlen
-                    page_links = soup.find("div", {"id": "mw-pages"})
-                    if page_links:
-                        next_links = page_links.find_all("a", href=lambda x: x and "pagefrom=" in x)
-                        if next_links:
-                            next_page_link = next_links[0]
-                
-                if nav_links:
-                    next_page_link = nav_links[0]
-                
-                if next_page_link and next_page_link.get('href'):
-                    current_url = urllib.parse.urljoin("https://en.wikipedia.org", next_page_link['href'])
-                    pages_crawled += 1
-                else:
-                    # Keine weitere Seite gefunden
-                    break
-                
-                # Begrenzen um nicht zu viele Artikel auf einmal zu sammeln
-                if len(person_articles) >= 500:
-                    print(f"  Maximale Artikelanzahl erreicht ({len(person_articles)})")
-                    return person_articles
-                    
         except Exception as e:
-            print(f"Fehler beim Durchsuchen der Kategorie {category_url}: {e}")
-            continue
+            print(f"Fehler beim Suchen der Kategorie-Seite: {e}")
+            break
     
-    print(f"Insgesamt {len(person_articles)} Artikel aus Kategorien gesammelt")
-    return person_articles
+    print(f"Letzte Seite nicht in den letzten {pages_searched} Kategorie-Seiten gefunden - starte von vorne")
+    return "https://en.wikipedia.org/wiki/Category:Living_people"
+
+def get_articles_from_single_category_page(category_url):
+    """Sammelt alle Artikel von einer einzelnen Kategorie-Seite."""
+    try:
+        print(f"Lade Artikel von Kategorie-Seite: {category_url}")
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+        }
+        resp = requests.get(category_url, timeout=10, headers=headers)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        
+        page_articles = []
+        
+        # Links zu Personen-Artikeln sammeln
+        content_div = soup.find("div", {"id": "mw-content-text"})
+        if content_div:
+            links = content_div.find_all("a", href=lambda x: x and x.startswith("/wiki/") and ":" not in x.split("/wiki/")[1])
+            for link in links:
+                article_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
+                page_articles.append(article_url)
+        
+        # Nächste Kategorie-Seiten-URL finden
+        next_category_url = None
+        next_links = soup.find_all("a", string=lambda text: text and text.strip() == "(next page)")
+        if next_links:
+            next_page_link = next_links[0]
+            if next_page_link.get('href'):
+                next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", next_page_link['href'])
+        
+        print(f"✓ {len(page_articles)} Artikel von dieser Kategorie-Seite geladen")
+        return page_articles, next_category_url
+        
+    except Exception as e:
+        print(f"Fehler beim Laden der Kategorie-Seite {category_url}: {e}")
+        return [], None
 
 def is_page_already_crawled(page_url):
     """Prüft ob eine Seite bereits gecrawlt wurde anhand der page_url in der Datenbank."""
@@ -291,83 +298,125 @@ def is_page_already_crawled(page_url):
     return False
 
 def crawl_images(max_pages=1000):
+    global queue
     old_db_len = get_len_images(face_db)
+    processed_count = 0
     
-    # Personen-Artikel aus Living People Kategorie sammeln
-    print("Sammle Living People Artikel...")
-    category_articles = get_person_articles_from_categories()
+    # Letzte gecrawlte Seite finden
+    last_page = get_last_crawled_page()
     
-    # Queue mit gefundenen Artikeln erstellen
-    queue = deque(category_articles)
+    if last_page:
+        print(f"Letzte bearbeitete Seite gefunden: {last_page}")
+        print("Setze Crawling nach der letzten Seite fort...")
+    else:
+        print("Keine vorherigen Daten gefunden - starte neu...")
     
-    print(f"Insgesamt {len(queue)} Artikel in der Warteschlange")
+    # Aktuelle Kategorie-Seiten-URL finden
+    current_category_url = get_current_category_page_url()
     
-    while queue and len(visited_pages) < max_pages:
-        url = queue.popleft()
-        if url in visited_pages:
+    while current_category_url and processed_count < max_pages:
+        print(f"\n--- Bearbeite Kategorie-Seite: {current_category_url} ---")
+        
+        # Artikel von der aktuellen Kategorie-Seite laden
+        page_articles, next_category_url = get_articles_from_single_category_page(current_category_url)
+        
+        if not page_articles:
+            print("Keine Artikel auf dieser Seite gefunden - gehe zur nächsten")
+            current_category_url = next_category_url
             continue
         
-        # Prüfen ob diese Seite bereits gecrawlt wurde (basierend auf der Datenbank)
-        if is_page_already_crawled(url):
-            print(f"Seite bereits gecrawlt (überspringe): {url}")
-            visited_pages.add(url)
-            continue
+        # Queue mit Artikeln von dieser Kategorie-Seite füllen
+        queue = deque()
         
-        # Für Wikipedia: Prüfen ob es sich um einen Personenartikel handelt
-        if "wikipedia.org" in url and not is_person_article(url):
-            print(f"Kein Personenartikel (überspringe): {url}")
-            visited_pages.add(url)
-            continue
+        # Wenn wir eine letzte Seite haben und sie in dieser Liste ist
+        if last_page and last_page in page_articles:
+            # Finde Position der letzten Seite in der Liste
+            last_index = page_articles.index(last_page)
+            # Starte mit den Artikeln NACH der letzten bearbeiteten Seite
+            remaining_articles = page_articles[last_index + 1:]
+            queue = deque(remaining_articles)
+            print(f"✓ Letzte Seite in aktueller Liste gefunden - setze ab nächster Seite fort ({len(remaining_articles)} verbleibend)")
+            # Nach dem ersten Durchlauf die letzte Seite zurücksetzen
+            last_page = None
+        else:
+            # Alle Artikel dieser Seite bearbeiten
+            queue = deque(page_articles)
+            print(f"Bearbeite alle {len(page_articles)} Artikel dieser Kategorie-Seite")
+        
+        # Artikel von der aktuellen Kategorie-Seite bearbeiten
+        while queue and processed_count < max_pages:
+            url = queue.popleft()
             
-        print(f"Crawle Seite: {url} ({len(visited_pages)+1}/{max_pages})")
-        visited_pages.add(url)
-
-        try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
-            }
-            resp = requests.get(url, timeout=10, headers=headers)
-            resp.raise_for_status()
-        except Exception as e:
-            print(f"Fehler beim Laden der Seite {url}: {e}")
-            continue
-
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        # Bilder finden und herunterladen
-        images = soup.find_all("img")
-        for img in images:
-            img_url = img.get("src")
-            if not img_url:
+            # Prüfen ob diese Seite bereits gecrawlt wurde
+            if is_page_already_crawled(url):
+                print(f"Seite bereits gecrawlt (überspringe): {url}")
                 continue
-            img_url = urllib.parse.urljoin(url, img_url)
+                
+            processed_count += 1
+            print(f"Crawle Seite: {url} ({processed_count}/{max_pages})")
 
-            image_bytes = download_image(img_url)
-            if not image_bytes:
+            try:
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+                }
+                resp = requests.get(url, timeout=10, headers=headers)
+                resp.raise_for_status()
+            except Exception as e:
+                print(f"Fehler beim Laden der Seite {url}: {e}")
                 continue
-            image = face_recognition.load_image_file(BytesIO(image_bytes))
-            if bild_bytes_enthält_gesicht(image):
-                if not compare_hashes(get_phash(image_bytes)):
-                    process_image(image, image_bytes, img_url, url)
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # Bilder finden und herunterladen
+            images = soup.find_all("img")
+            for img in images:
+                img_url = img.get("src")
+                if not img_url:
+                    continue
+                img_url = urllib.parse.urljoin(url, img_url)
+
+                image_bytes = download_image(img_url)
+                if not image_bytes:
+                    continue
+                image = face_recognition.load_image_file(BytesIO(image_bytes))
+                if bild_bytes_enthält_gesicht(image):
+                    if not compare_hashes(get_phash(image_bytes)):
+                        process_image(image, image_bytes, img_url, url)
+                    else:
+                        print(f"Bild bereits vorhanden: {img_url}")
                 else:
-                    print(f"Bild bereits vorhanden: {img_url}")
-            else:
-                print(f"Kein Gesicht gefunden: {img_url}")
-
-        # Interne Links sammeln
-        links = soup.find_all("a", href=True)
-        for link in links:
-            next_url = urllib.parse.urljoin(url, link['href'])
-            if is_internal_link(url, next_url) and next_url not in visited_pages:
-                queue.append(next_url)
+                    print(f"Kein Gesicht gefunden: {img_url}")
+            
+            # Ergebnisse speichern
+            save_database()
         
-        # Ergebnisse speichern
-        with open("face_embeddings.json", "w") as f:
-                json.dump(face_db, f, indent=2)
+        # Zur nächsten Kategorie-Seite
+        print(f"✓ Kategorie-Seite abgeschlossen. Verarbeitete Artikel: {processed_count}")
+        if processed_count >= max_pages:
+            print(f"Maximale Anzahl erreicht ({max_pages})")
+            break
+            
+        current_category_url = next_category_url
+        if not current_category_url:
+            print("Keine weiteren Kategorie-Seiten gefunden - Crawling abgeschlossen")
+            break
 
     print(f"Insgesamt sind {get_len_images(face_db)} Bilder in der Datenbank, davon wurden {get_len_images(face_db) - old_db_len} neue Bilder gespeichert.")
 
 if __name__ == "__main__":
     print("Starte Living People Crawler...")
-    crawl_images(max_pages=100)  # max_pages anpassen
+    try:
+        crawl_images()  # max_pages anpassen
+    except KeyboardInterrupt:
+        # Falls der Signal-Handler nicht ausgelöst wird
+        print("\nUnterbrechung erkannt! Speichere Datenbank...")
+        save_database()
+        print("Crawler beendet.")
+    except Exception as e:
+        print(f"Unerwarteter Fehler: {e}")
+        save_database()
+        print("Datenbank wurde trotz Fehler gespeichert.")
+    finally:
+        # Sicherstellen, dass die Datenbank auf jeden Fall gespeichert wird
+        save_database()
     
