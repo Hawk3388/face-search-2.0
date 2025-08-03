@@ -12,7 +12,7 @@ def load_database(path="face_embeddings.json"):
         return json.load(f)
 
 # Vergleiche Embedding mit allen bekannten
-def find_matches(query_embedding, db, tolerance=0.55):
+def find_matches(query_embedding, db, tolerance=0.5):
     matches = []
     for entry in db:
         db_embedding = np.array(entry["embedding"])
@@ -39,7 +39,7 @@ if uploaded_file:
     else:
         image = face_recognition.load_image_file(uploaded_file)
 
-    encodings = face_recognition.face_encodings(image, model="large")
+    encodings = face_recognition.face_encodings(image, model="large", num_jitters=10)
 
     if not encodings:
         st.warning("❌ Kein Gesicht im Bild erkannt.")

@@ -22,6 +22,7 @@ import imagehash
 import shutil
 import signal
 import sys
+import gc  # Für Garbage Collection
 
 queue = deque()  # Globale Queue für Signal-Handler
 
@@ -254,6 +255,12 @@ def download_image(img_url):
         }
         response = requests.get(img_url, timeout=10, headers=headers)
         response.raise_for_status()
+        
+        # Bildgröße begrenzen um Memory-Probleme zu vermeiden
+        if len(response.content) > 10 * 1024 * 1024:  # 10MB Limit
+            print(f"Überspringe zu großes Bild ({len(response.content)/1024/1024:.1f}MB): {img_url}")
+            return None
+            
         return response.content
     except Exception as e:
         print(f"Fehler beim Herunterladen von {img_url}: {e}")
@@ -535,19 +542,34 @@ def crawl_images():
                 image_bytes = download_image(img_url)
                 if not image_bytes:
                     continue
-                image = face_recognition.load_image_file(BytesIO(image_bytes))
-                if bild_bytes_enthält_gesicht(image):
-                    if not compare_hashes(get_phash(image_bytes)):
-                        process_image(image, image_bytes, img_url, url)
+                    
+                try:
+                    image = face_recognition.load_image_file(BytesIO(image_bytes))
+                    
+                    if bild_bytes_enthält_gesicht(image):
+                        if not compare_hashes(get_phash(image_bytes)):
+                            process_image(image, image_bytes, img_url, url)
+                        else:
+                            print(f"Bild bereits im aktuellen Artikel vorhanden: {img_url}")
                     else:
-                        print(f"Bild bereits im aktuellen Artikel vorhanden: {img_url}")
-                else:
-                    print(f"Kein Gesicht gefunden: {img_url}")
+                        print(f"Kein Gesicht gefunden: {img_url}")
+                        
+                    # Explizit Speicher freigeben
+                    del image, image_bytes
+                    
+                except Exception as e:
+                    print(f"Fehler beim Laden des Bildes {img_url}: {e}")
+                    continue
             
             # Ergebnisse für diesen Artikel speichern (nur wenn Daten vorhanden)
             if current_article_data:
                 entries_saved += len(current_article_data)
                 save_database()
+            
+            # Regelmäßige Garbage Collection alle 50 Artikel um Memory Leaks zu vermeiden
+            if processed_count % 50 == 0:
+                gc.collect()
+                print(f"🧹 Garbage Collection durchgeführt nach {processed_count} Artikeln")
         
         # Zur nächsten Kategorie-Seite
         print(f"✓ Kategorie-Seite abgeschlossen. Verarbeitete Artikel: {processed_count}")
