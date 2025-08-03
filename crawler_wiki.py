@@ -26,35 +26,110 @@ import sys
 queue = deque()  # Globale Queue für Signal-Handler
 
 def save_database():
-    """Speichert die Gesichts-Datenbank in die JSON-Datei."""
+    """Speichert die aktuellen Artikel-Daten mit append-only (absolut kein Lesen!)."""
+    global json_initialized, total_entries_saved
+    
+    if not current_article_data:
+        return
+        
     try:
-        with open("face_embeddings.json", "w") as f:
-            json.dump(face_db, f, indent=2)
-        print("Datenbank erfolgreich gespeichert.")
+        db_file = "face_embeddings.json"
+        
+        # Wenn JSON noch nicht initialisiert
+        if not json_initialized:
+            if not os.path.exists(db_file):
+                # Neue Datei - schreibe JSON-Array Anfang
+                with open(db_file, "w") as f:
+                    f.write("[\n")
+                is_first_entry = True
+            else:
+                # Existierende Datei - entferne das schließende ] am Ende
+                remove_closing_bracket(db_file)
+                is_first_entry = False  # Datei hat bereits Einträge
+            
+            # Datei als initialisiert markieren
+            json_initialized = True
+        else:
+            is_first_entry = False
+        
+        # Daten anhängen (append-only!)
+        with open(db_file, "a") as f:
+            for i, entry in enumerate(current_article_data):
+                if not is_first_entry or i > 0:
+                    f.write(",\n")
+                f.write("  " + json.dumps(entry, indent=2).replace('\n', '\n  '))
+                is_first_entry = False
+        
+        # Zähler aktualisieren und periodisches Backup prüfen
+        entries_added = len(current_article_data)
+        total_entries_saved += entries_added
+        create_periodic_backup(total_entries_saved)
+        
+        print(f"{entries_added} neue Einträge zur Datenbank hinzugefügt. (Gesamt: {total_entries_saved})")
+        
+        # Aktuelle Artikel-Daten nach dem Speichern leeren
+        current_article_data.clear()
     except Exception as e:
         print(f"Fehler beim Speichern der Datenbank: {e}")
 
+def remove_closing_bracket(filename):
+    """Entfernt das schließende ] am Ende der Datei ohne die Datei zu lesen."""
+    try:
+        # Öffne Datei im read+write Modus
+        with open(filename, "r+b") as f:
+            # Gehe zum Ende
+            f.seek(0, 2)
+            file_size = f.tell()
+            
+            if file_size < 10:
+                return  # Datei zu klein
+            
+            # Gehe zu den letzten Bytes und entferne ] und Whitespace
+            max_chars_to_check = min(10, file_size)
+            f.seek(file_size - max_chars_to_check)
+            
+            # Lese die letzten Bytes
+            end_content = f.read().decode('utf-8', errors='ignore')
+            
+            # Finde Position des letzten ] 
+            bracket_pos = end_content.rfind(']')
+            if bracket_pos != -1:
+                # Schneide ab der Position des ] ab
+                new_end_pos = file_size - max_chars_to_check + bracket_pos
+                f.seek(new_end_pos)
+                f.truncate()
+                print("Schließendes ] entfernt für append-Modus.")
+            
+    except Exception as e:
+        print(f"Fehler beim Entfernen des schließenden ]: {e}")
+
+def close_database():
+    """Schließt die JSON-Array ordnungsgemäß ab."""
+    global json_initialized
+    try:
+        db_file = "face_embeddings.json"
+        if os.path.exists(db_file) and json_initialized:
+            with open(db_file, "a") as f:
+                f.write("\n]")
+            print("Datenbank ordnungsgemäß geschlossen.")
+            # Flag zurücksetzen um doppeltes Schließen zu vermeiden
+            json_initialized = False
+    except Exception as e:
+        print(f"Fehler beim Schließen der Datenbank: {e}")
+
 def get_visited_pages_from_db():
-    """Extrahiert alle bereits besuchten Seiten aus der Datenbank."""
-    visited_pages = set()
-    for entry in face_db:
-        page_url = entry.get("page_url")
-        if page_url:
-            visited_pages.add(page_url)
-    return visited_pages
+    """Da wir kein Lesen machen - leeres Set zurückgeben."""
+    return set()
 
 def get_last_crawled_page():
-    """Gibt die letzte gecrawlte Seite zurück."""
-    if not face_db:
-        return None
-    # Das letzte Element in der Datenbank ist die zuletzt bearbeitete Seite
-    last_entry = face_db[-1]
-    return last_entry.get("page_url")
+    """Da wir kein Lesen machen - None zurückgeben (immer von vorne starten)."""
+    return None
 
 def signal_handler(sig, frame):
     """Handler für Unterbrechungssignale (Ctrl+C)."""
     print("\nUnterbrechung erkannt! Speichere Datenbank...")
     save_database()
+    close_database()
     print("Crawler beendet.")
     sys.exit(0)
 
@@ -63,33 +138,44 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 def create_backup():
-    """Erstellt eine Sicherheitskopie der face_embeddings.json Datei"""
-    db_file = "face_embeddings.json"
-    if os.path.exists(db_file):
-        # Zeitstempel für Backup-Namen
-        backup_file = f"face_embeddings_backup.json"
-        
-        try:
+    """Erstellt ein Backup beim Start."""
+    try:
+        db_file = "face_embeddings.json"
+        if os.path.exists(db_file):
+            backup_file = f"face_embeddings_backup.json"
+            
             shutil.copy2(db_file, backup_file)
-            print(f"Sicherheitskopie erstellt: {backup_file}")
-        except Exception as e:
-            print(f"Fehler beim Erstellen der Sicherheitskopie: {e}")
-    else:
-        print("Keine bestehende Datenbank gefunden - keine Sicherheitskopie erstellt.")
+            print(f"📁 Start-Backup erstellt: {backup_file}")
+        else:
+            print("Keine bestehende Datenbank gefunden - kein Start-Backup erstellt.")
+    except Exception as e:
+        print(f"Fehler beim Erstellen des Start-Backups: {e}")
 
-# Sicherheitskopie beim Start erstellen
+def create_periodic_backup(entries_count):
+    """Erstellt alle 1000 Einträge ein Backup."""
+    try:
+        if entries_count > 0 and entries_count % 1000 == 0:
+            import datetime
+            db_file = "face_embeddings.json"
+            if os.path.exists(db_file):
+                backup_file = f"face_embeddings_backup.json"
+                
+                shutil.copy2(db_file, backup_file)
+                print(f"📁 Backup erstellt nach {entries_count} Einträgen: {backup_file}")
+    except Exception as e:
+        print(f"Fehler beim Erstellen des periodischen Backups: {e}")
+
+# Backup beim Start überspringen
 create_backup()
 
-# Gesichts-Datenbank laden oder erstellen
-try:
-    with open("face_embeddings.json", "r") as f:
-        face_db = json.load(f)
-except FileNotFoundError:
-    print("face_embeddings.json nicht gefunden. Erstelle neue Datenbank.")
-    face_db = []
-except json.JSONDecodeError:
-    print("Fehler beim Laden der Gesichts-Datenbank. Stelle sicher, dass die Datei korrekt formatiert ist.")
-    face_db = []
+# Globale Variable für aktuellen Artikel (RAM-sparend)
+current_article_data = []
+
+# Flag ob die JSON-Datei bereits initialisiert wurde
+json_initialized = False
+
+# Zähler für Backup-System
+total_entries_saved = 0
 
 def is_internal_link(base_url, link):
     base_domain = urllib.parse.urlparse(base_url).netloc
@@ -141,6 +227,9 @@ def download_image(img_url):
     if ".svg" in img_url.lower():
         print(f"Überspringe inkompatibles Bildformat: {img_url}")
         return None
+    if img_url.lower().endswith("wikipedia.png"):
+        print(f"Überspringe Wikipedia-Logo: {img_url}")
+        return None
     try:
         # Gleichen User-Agent wie beim Crawlen verwenden
         headers = {
@@ -165,7 +254,8 @@ def process_image(image, image_bytes, img_url, page_url):
                 "embedding": embedding,
                 "phash": str(phash)
             }
-            face_db.append(entry)
+            # Zu aktuellen Artikel-Daten hinzufügen (RAM-effizient)
+            current_article_data.append(entry)
             print(f"Gesicht gefunden in {img_url}")
     except Exception as e:
         print(f"Fehler beim Verarbeiten von Bild {img_url}: {e}")
@@ -191,15 +281,13 @@ def str_to_phash(phash_str):
         return None
 
 def compare_hashes(phash):
-    for entry in face_db:
+    """Da wir keine Datei lesen - immer False (keine Duplikate erkennen)."""
+    # Nur in aktuellen Artikel-Daten prüfen
+    for entry in current_article_data:
         existing_phash = str_to_phash(entry["phash"])
-        if existing_phash and existing_phash - phash < 5:  # Toleranzwert für Ähnlichkeit
+        if existing_phash and existing_phash - phash < 5:
             return True
     return False
-
-def get_len_images(db):
-    """Gibt die Anzahl der Bilder in der Datenbank zurück."""
-    return len(db)
 
 def get_current_category_page_url():
     """Findet die aktuelle Kategorie-Seiten-URL basierend auf der letzten bearbeiteten Seite."""
@@ -362,28 +450,19 @@ def get_articles_from_single_category_page(category_url):
         return [], None
 
 def is_page_already_crawled(page_url):
-    """Prüft ob eine Seite bereits gecrawlt wurde anhand der page_url in der Datenbank."""
-    for entry in face_db:
-        if entry.get("page_url") == page_url:
-            return True
+    """Da wir keine Datei lesen - immer False (keine Duplikate erkennen)."""
     return False
 
 def crawl_images(max_pages=1000):
-    global queue
-    old_db_len = get_len_images(face_db)
+    global queue, current_article_data
     processed_count = 0
+    entries_saved = 0
     
-    # Letzte gecrawlte Seite finden
-    last_page = get_last_crawled_page()
+    # Da wir nichts lesen - immer von vorne starten
+    print("Starte neuen Crawling-Durchlauf (append-only)...")
     
-    if last_page:
-        print(f"Letzte bearbeitete Seite gefunden: {last_page}")
-        print("Setze Crawling nach der letzten Seite fort...")
-    else:
-        print("Keine vorherigen Daten gefunden - starte neu...")
-    
-    # Aktuelle Kategorie-Seiten-URL finden
-    current_category_url = get_current_category_page_url()
+    # Aktuelle Kategorie-Seiten-URL - immer von vorne
+    current_category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
     
     while current_category_url and processed_count < max_pages:
         print(f"\n--- Bearbeite Kategorie-Seite: {current_category_url} ---")
@@ -397,34 +476,18 @@ def crawl_images(max_pages=1000):
             continue
         
         # Queue mit Artikeln von dieser Kategorie-Seite füllen
-        queue = deque()
-        
-        # Wenn wir eine letzte Seite haben und sie in dieser Liste ist
-        if last_page and last_page in page_articles:
-            # Finde Position der letzten Seite in der Liste
-            last_index = page_articles.index(last_page)
-            # Starte mit den Artikeln NACH der letzten bearbeiteten Seite
-            remaining_articles = page_articles[last_index + 1:]
-            queue = deque(remaining_articles)
-            print(f"✓ Letzte Seite in aktueller Liste gefunden - setze ab nächster Seite fort ({len(remaining_articles)} verbleibend)")
-            # Nach dem ersten Durchlauf die letzte Seite zurücksetzen
-            last_page = None
-        else:
-            # Alle Artikel dieser Seite bearbeiten
-            queue = deque(page_articles)
-            print(f"Bearbeite alle {len(page_articles)} Artikel dieser Kategorie-Seite")
+        queue = deque(page_articles)
+        print(f"Bearbeite alle {len(page_articles)} Artikel dieser Kategorie-Seite")
         
         # Artikel von der aktuellen Kategorie-Seite bearbeiten
         while queue and processed_count < max_pages:
             url = queue.popleft()
-            
-            # Prüfen ob diese Seite bereits gecrawlt wurde
-            if is_page_already_crawled(url):
-                print(f"Seite bereits gecrawlt (überspringe): {url}")
-                continue
                 
             processed_count += 1
             print(f"Crawle Seite: {url} ({processed_count}/{max_pages})")
+
+            # Aktuelle Artikel-Daten für diesen Artikel leeren
+            current_article_data.clear()
 
             try:
                 headers = {
@@ -454,12 +517,14 @@ def crawl_images(max_pages=1000):
                     if not compare_hashes(get_phash(image_bytes)):
                         process_image(image, image_bytes, img_url, url)
                     else:
-                        print(f"Bild bereits vorhanden: {img_url}")
+                        print(f"Bild bereits im aktuellen Artikel vorhanden: {img_url}")
                 else:
                     print(f"Kein Gesicht gefunden: {img_url}")
             
-            # Ergebnisse speichern
-            save_database()
+            # Ergebnisse für diesen Artikel speichern (nur wenn Daten vorhanden)
+            if current_article_data:
+                entries_saved += len(current_article_data)
+                save_database()
         
         # Zur nächsten Kategorie-Seite
         print(f"✓ Kategorie-Seite abgeschlossen. Verarbeitete Artikel: {processed_count}")
@@ -472,22 +537,25 @@ def crawl_images(max_pages=1000):
             print("Keine weiteren Kategorie-Seiten gefunden - Crawling abgeschlossen")
             break
 
-    print(f"Insgesamt sind {get_len_images(face_db)} Bilder in der Datenbank, davon wurden {get_len_images(face_db) - old_db_len} neue Bilder gespeichert.")
+    print(f"Crawling abgeschlossen. {entries_saved} neue Einträge zur Datenbank hinzugefügt.")
 
 if __name__ == "__main__":
-    print("Starte Living People Crawler...")
+    print("Starte Living People Crawler (append-only)...")
     try:
         crawl_images()  # max_pages anpassen
     except KeyboardInterrupt:
         # Falls der Signal-Handler nicht ausgelöst wird
         print("\nUnterbrechung erkannt! Speichere Datenbank...")
         save_database()
+        close_database()
         print("Crawler beendet.")
     except Exception as e:
         print(f"Unerwarteter Fehler: {e}")
         save_database()
+        close_database()
         print("Datenbank wurde trotz Fehler gespeichert.")
     finally:
-        # Sicherstellen, dass die Datenbank auf jeden Fall gespeichert wird
+        # Sicherstellen, dass die Datenbank auf jeden Fall gespeichert und geschlossen wird
         save_database()
+        close_database()
     
