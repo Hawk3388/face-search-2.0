@@ -122,8 +122,25 @@ def get_visited_pages_from_db():
     return set()
 
 def get_last_crawled_page():
-    """Da wir kein Lesen machen - None zurückgeben (immer von vorne starten)."""
+    """Liest den letzten gecrawlten Artikel aus einer kleinen separaten Datei."""
+    try:
+        if os.path.exists("last_crawled_page.txt"):
+            with open("last_crawled_page.txt", "r", encoding="utf-8") as f:
+                last_page = f.read().strip()
+                if last_page:
+                    print(f"📄 Letzter gecrawlter Artikel: {last_page}")
+                    return last_page
+    except Exception as e:
+        print(f"Fehler beim Lesen der letzten Seite: {e}")
     return None
+
+def save_last_crawled_page(page_url):
+    """Speichert den aktuellen Artikel-URL in eine kleine separate Datei."""
+    try:
+        with open("last_crawled_page.txt", "w", encoding="utf-8") as f:
+            f.write(page_url)
+    except Exception as e:
+        print(f"Fehler beim Speichern der letzten Seite: {e}")
 
 def signal_handler(sig, frame):
     """Handler für Unterbrechungssignale (Ctrl+C)."""
@@ -458,11 +475,15 @@ def crawl_images(max_pages=1000):
     processed_count = 0
     entries_saved = 0
     
-    # Da wir nichts lesen - immer von vorne starten
-    print("Starte neuen Crawling-Durchlauf (append-only)...")
+    # Prüfen ob wir einen Resume-Punkt haben
+    last_page = get_last_crawled_page()
+    if last_page:
+        print("Resume: Suche Startpunkt basierend auf letztem Artikel...")
+    else:
+        print("Starte neuen Crawling-Durchlauf (append-only)...")
     
-    # Aktuelle Kategorie-Seiten-URL - immer von vorne
-    current_category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
+    # Aktuelle Kategorie-Seiten-URL bestimmen
+    current_category_url = get_current_category_page_url()
     
     while current_category_url and processed_count < max_pages:
         print(f"\n--- Bearbeite Kategorie-Seite: {current_category_url} ---")
@@ -485,6 +506,9 @@ def crawl_images(max_pages=1000):
                 
             processed_count += 1
             print(f"Crawle Seite: {url} ({processed_count}/{max_pages})")
+
+            # Letzten gecrawlten Artikel speichern (für Resume-Funktion)
+            save_last_crawled_page(url)
 
             # Aktuelle Artikel-Daten für diesen Artikel leeren
             current_article_data.clear()
