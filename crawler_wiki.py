@@ -257,7 +257,7 @@ def download_image(img_url):
         response.raise_for_status()
         
         # Bildgröße begrenzen um Memory-Probleme zu vermeiden
-        if len(response.content) > 10 * 1024 * 1024:  # 10MB Limit
+        if len(response.content) > 2 * 1024 * 1024:  # 2MB Limit
             print(f"Überspringe zu großes Bild ({len(response.content)/1024/1024:.1f}MB): {img_url}")
             return None
             
