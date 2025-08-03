@@ -504,7 +504,31 @@ def crawl_images():
         
         # Queue mit Artikeln von dieser Kategorie-Seite füllen
         queue = deque(page_articles)
-        print(f"Bearbeite alle {len(page_articles)} Artikel dieser Kategorie-Seite")
+        
+        # Wenn wir einen Resume-Punkt haben, überspringe alle Artikel bis zum letzten + 1
+        if last_page:
+            articles_to_skip = []
+            found_last_page = False
+            
+            for article in page_articles:
+                if article == last_page:
+                    found_last_page = True
+                    print(f"🎯 Letzten Artikel gefunden: {article} - überspringe bis hierhin")
+                    break
+                else:
+                    articles_to_skip.append(article)
+            
+            if found_last_page:
+                # Überspringe alle Artikel bis zum letzten (inklusive)
+                for _ in range(len(articles_to_skip) + 1):  # +1 um den letzten Artikel selbst zu überspringen
+                    if queue:
+                        queue.popleft()
+                print(f"⏭️ {len(articles_to_skip) + 1} bereits bearbeitete Artikel übersprungen")
+                # Reset last_page nach erfolgreichem Resume
+                last_page = None
+        
+        remaining_articles = len(queue)
+        print(f"Bearbeite {remaining_articles} verbleibende Artikel dieser Kategorie-Seite")
         
         # Artikel von der aktuellen Kategorie-Seite bearbeiten
         while queue:
