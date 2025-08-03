@@ -319,9 +319,8 @@ def get_current_category_page_url():
     
     category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
     pages_searched = 0
-    max_search_pages = 50  # Begrenzte Suche um nicht ewig zu suchen
     
-    while category_url and pages_searched < max_search_pages:
+    while category_url:
         try:
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
@@ -382,8 +381,8 @@ def get_current_category_page_url():
             print(f"Fehler beim Suchen der Kategorie-Seite: {e}")
             break
     
-    print(f"Letzte Seite nicht in den letzten {pages_searched} Kategorie-Seiten gefunden - starte von vorne")
-    return "https://en.wikipedia.org/wiki/Category:Living_people"
+    print(f"Letzte Seite nicht gefunden nach {pages_searched} Kategorie-Seiten - mache von aktueller Position weiter")
+    return category_url  # Von der aktuellen Kategorie-Seite weitermachen
 
 def get_articles_from_single_category_page(category_url):
     """Sammelt alle Artikel von einer einzelnen Kategorie-Seite."""
@@ -470,7 +469,7 @@ def is_page_already_crawled(page_url):
     """Da wir keine Datei lesen - immer False (keine Duplikate erkennen)."""
     return False
 
-def crawl_images(max_pages=1000):
+def crawl_images():
     global queue, current_article_data
     processed_count = 0
     entries_saved = 0
@@ -485,7 +484,7 @@ def crawl_images(max_pages=1000):
     # Aktuelle Kategorie-Seiten-URL bestimmen
     current_category_url = get_current_category_page_url()
     
-    while current_category_url and processed_count < max_pages:
+    while current_category_url:
         print(f"\n--- Bearbeite Kategorie-Seite: {current_category_url} ---")
         
         # Artikel von der aktuellen Kategorie-Seite laden
@@ -501,11 +500,11 @@ def crawl_images(max_pages=1000):
         print(f"Bearbeite alle {len(page_articles)} Artikel dieser Kategorie-Seite")
         
         # Artikel von der aktuellen Kategorie-Seite bearbeiten
-        while queue and processed_count < max_pages:
+        while queue:
             url = queue.popleft()
                 
             processed_count += 1
-            print(f"Crawle Seite: {url} ({processed_count}/{max_pages})")
+            print(f"Crawle Seite: {url} (#{processed_count})")
 
             # Letzten gecrawlten Artikel speichern (für Resume-Funktion)
             save_last_crawled_page(url)
@@ -552,9 +551,6 @@ def crawl_images(max_pages=1000):
         
         # Zur nächsten Kategorie-Seite
         print(f"✓ Kategorie-Seite abgeschlossen. Verarbeitete Artikel: {processed_count}")
-        if processed_count >= max_pages:
-            print(f"Maximale Anzahl erreicht ({max_pages})")
-            break
             
         current_category_url = next_category_url
         if not current_category_url:
