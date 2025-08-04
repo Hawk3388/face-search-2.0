@@ -6,6 +6,8 @@ scp Arvid@raspberrypi.local:face_embeddings.json D:\Dateien\Arvid\Python\face-se
 
 scp D:\Dateien\Arvid\Python\face-search-2.0\crawler_wiki.py Arvid@raspberrypi.local:~
 
+ssh Arvid@raspberrypi.local
+
 du -h face_embeddings.json
 
 top
