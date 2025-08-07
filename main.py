@@ -57,7 +57,7 @@ if uploaded_file:
                 st.markdown(f"**Ähnlichkeit**: {dist:.4f}")
                 st.markdown(f"[Bild anzeigen]({entry['image_url']})  \n[Seite besuchen]({entry['page_url']})")
                 try:
-                    img_bytes = requests.get(entry['image_url'], timeout=5).content
+                    img_bytes = requests.get(entry['image_url'], timeout=60).content
                     st.image(Image.open(BytesIO(img_bytes)), width=250)
                 except Exception:
                     st.warning("Bild konnte nicht geladen werden.")
