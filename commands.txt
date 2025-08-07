@@ -13,3 +13,11 @@ du -h face_embeddings.json
 top
 
 python3 crawler_wiki.py
+
+sudo cp face_embeddings.json /mnt/usb/face_embeddings.json
+
+sudo mount /dev/sda1 /mnt/usb
+
+sudo umount /mnt/usb
+
+du -h face_embeddings.json
