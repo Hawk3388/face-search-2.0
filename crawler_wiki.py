@@ -253,7 +253,7 @@ def download_image(img_url):
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
         }
-        response = requests.get(img_url, timeout=10, headers=headers)
+        response = requests.get(img_url, timeout=60, headers=headers)
         response.raise_for_status()
         
         # Bildgröße begrenzen um Memory-Probleme zu vermeiden
@@ -332,7 +332,7 @@ def get_current_category_page_url():
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
             }
-            resp = requests.get(category_url, timeout=10, headers=headers)
+            resp = requests.get(category_url, timeout=60, headers=headers)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
             
@@ -398,7 +398,7 @@ def get_articles_from_single_category_page(category_url):
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
         }
-        resp = requests.get(category_url, timeout=10, headers=headers)
+        resp = requests.get(category_url, timeout=60, headers=headers)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         
@@ -547,7 +547,7 @@ def crawl_images():
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
                 }
-                resp = requests.get(url, timeout=10, headers=headers)
+                resp = requests.get(url, timeout=60, headers=headers)
                 resp.raise_for_status()
             except Exception as e:
                 print(f"Fehler beim Laden der Seite {url}: {e}")
