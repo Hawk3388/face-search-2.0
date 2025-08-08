@@ -537,9 +537,6 @@ def crawl_images():
             processed_count += 1
             print(f"Crawle Seite: {url} (#{processed_count})")
 
-            # Letzten gecrawlten Artikel speichern (für Resume-Funktion)
-            save_last_crawled_page(url)
-
             # Aktuelle Artikel-Daten für diesen Artikel leeren
             current_article_data.clear()
 
@@ -589,9 +586,12 @@ def crawl_images():
             if current_article_data:
                 entries_saved += len(current_article_data)
                 save_database()
-            
-            # Regelmäßige Garbage Collection alle 50 Artikel um Memory Leaks zu vermeiden
-            if processed_count % 50 == 0:
+                
+            # Letzten gecrawlten Artikel speichern (für Resume-Funktion)
+            save_last_crawled_page(url)
+
+            # Regelmäßige Garbage Collection alle 10 Artikel um Memory Leaks zu vermeiden
+            if processed_count % 10 == 0:
                 gc.collect()
                 print(f"🧹 Garbage Collection durchgeführt nach {processed_count} Artikeln")
         

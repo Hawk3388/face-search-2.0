@@ -2,8 +2,6 @@ streamlit run main.py
 
 ~ 4 kb pro bild
 
-scp Arvid@raspberrypi.local:face_embeddings.json D:\Dateien\Arvid\Python\face-search-2.0
-
 scp D:\Dateien\Arvid\Python\face-search-2.0\crawler_wiki.py Arvid@raspberrypi.local:~
 
 ssh Arvid@raspberrypi.local
@@ -21,3 +19,7 @@ sudo mount /dev/sda1 /mnt/usb
 sudo umount /mnt/usb
 
 du -h face_embeddings.json
+
+ping raspberrypi.local
+
+nano last_crawled_page.txt
