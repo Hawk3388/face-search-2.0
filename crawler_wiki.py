@@ -23,6 +23,7 @@ import shutil
 import signal
 import sys
 import gc  # Für Garbage Collection
+import time  # Für Wartezeiten bei Fehlern
 
 queue = deque()  # Globale Queue für Signal-Handler
 
@@ -248,23 +249,28 @@ def download_image(img_url):
     if img_url.lower().endswith("wikipedia.png"):
         print(f"Überspringe Wikipedia-Logo: {img_url}")
         return None
-    try:
-        # Gleichen User-Agent wie beim Crawlen verwenden
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
-        }
-        response = requests.get(img_url, timeout=60, headers=headers)
-        response.raise_for_status()
-        
-        # Bildgröße begrenzen um Memory-Probleme zu vermeiden
-        if len(response.content) > 2 * 1024 * 1024:  # 2MB Limit
-            print(f"Überspringe zu großes Bild ({len(response.content)/1024/1024:.1f}MB): {img_url}")
-            return None
+    
+    # Unendliche Retry-Schleife - niemals aufgeben!
+    while True:
+        try:
+            # Gleichen User-Agent wie beim Crawlen verwenden
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+            }
+            response = requests.get(img_url, timeout=60, headers=headers)
+            response.raise_for_status()
             
-        return response.content
-    except Exception as e:
-        print(f"Fehler beim Herunterladen von {img_url}: {e}")
-        return None
+            # Bildgröße begrenzen um Memory-Probleme zu vermeiden
+            if len(response.content) > 2 * 1024 * 1024:  # 2MB Limit
+                print(f"Überspringe zu großes Bild ({len(response.content)/1024/1024:.1f}MB): {img_url}")
+                return None
+                
+            return response.content
+        except Exception as e:
+            print(f"⚠️ Netzwerkfehler beim Herunterladen von {img_url}: {e}")
+            print("⏳ Warte 30 Sekunden und versuche es erneut...")
+            time.sleep(30)
+            # Schleife läuft weiter - niemals aufgeben!
 
 def process_image(image, image_bytes, img_url, page_url):
     try:
@@ -328,64 +334,68 @@ def get_current_category_page_url():
     pages_searched = 0
     
     while category_url:
-        try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
-            }
-            resp = requests.get(category_url, timeout=60, headers=headers)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
-            
-            # Artikel auf dieser Seite sammeln
-            content_div = soup.find("div", {"id": "mw-content-text"})
-            if content_div:
-                links = content_div.find_all("a", href=lambda x: x and x.startswith("/wiki/") and ":" not in x.split("/wiki/")[1])
-                for link in links:
-                    article_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
-                    if article_url == last_page:
-                        print(f"✓ Letzte Seite gefunden auf Kategorie-Seite: {category_url}")
-                        return category_url
-            
-            # Zur nächsten Kategorie-Seite (robuste Suche)
-            next_page_link = None
-            
-            # Methode 1: Suche nach "(next page)" Link
-            next_links = soup.find_all("a", string=lambda text: text and text.strip() == "(next page)")
-            if next_links:
-                next_page_link = next_links[0]
-            
-            # Methode 2: Fallback - Suche nach Link mit "next" Text  
-            if not next_page_link:
-                all_links = soup.find_all("a", href=True)
-                for link in all_links:
-                    link_text = link.get_text().strip().lower()
-                    if "next page" in link_text or link_text == "next":
+        # Unendliche Retry-Schleife bei Netzwerkfehlern
+        while True:
+            try:
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+                }
+                resp = requests.get(category_url, timeout=60, headers=headers)
+                resp.raise_for_status()
+                soup = BeautifulSoup(resp.text, "html.parser")
+                break  # Erfolgreich geladen, verlasse Retry-Schleife
+            except Exception as e:
+                print(f"⚠️ Netzwerkfehler beim Suchen der Kategorie-Seite {category_url}: {e}")
+                print("⏳ Warte 60 Sekunden und versuche es erneut...")
+                time.sleep(60)
+                # Retry-Schleife läuft weiter
+        
+        # Artikel auf dieser Seite sammeln
+        content_div = soup.find("div", {"id": "mw-content-text"})
+        if content_div:
+            links = content_div.find_all("a", href=lambda x: x and x.startswith("/wiki/") and ":" not in x.split("/wiki/")[1])
+            for link in links:
+                article_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
+                if article_url == last_page:
+                    print(f"✓ Letzte Seite gefunden auf Kategorie-Seite: {category_url}")
+                    return category_url
+        
+        # Zur nächsten Kategorie-Seite (robuste Suche)
+        next_page_link = None
+        
+        # Methode 1: Suche nach "(next page)" Link
+        next_links = soup.find_all("a", string=lambda text: text and text.strip() == "(next page)")
+        if next_links:
+            next_page_link = next_links[0]
+        
+        # Methode 2: Fallback - Suche nach Link mit "next" Text  
+        if not next_page_link:
+            all_links = soup.find_all("a", href=True)
+            for link in all_links:
+                link_text = link.get_text().strip().lower()
+                if "next page" in link_text or link_text == "next":
+                    next_page_link = link
+                    break
+        
+        # Methode 3: Suche nach pagefrom Parameter in URLs
+        if not next_page_link:
+            pagefrom_links = soup.find_all("a", href=lambda x: x and "pagefrom=" in x)
+            if pagefrom_links:
+                # Filtere Links die nach der aktuellen Seite kommen
+                for link in pagefrom_links:
+                    if "(next page)" in str(link.parent) or "next" in link.get_text().lower():
                         next_page_link = link
                         break
-            
-            # Methode 3: Suche nach pagefrom Parameter in URLs
-            if not next_page_link:
-                pagefrom_links = soup.find_all("a", href=lambda x: x and "pagefrom=" in x)
-                if pagefrom_links:
-                    # Filtere Links die nach der aktuellen Seite kommen
-                    for link in pagefrom_links:
-                        if "(next page)" in str(link.parent) or "next" in link.get_text().lower():
-                            next_page_link = link
-                            break
-                    # Falls kein expliziter "next" Text, nimm den ersten pagefrom Link
-                    if not next_page_link and pagefrom_links:
-                        next_page_link = pagefrom_links[0]
-            
-            if next_page_link and next_page_link.get('href'):
-                category_url = urllib.parse.urljoin("https://en.wikipedia.org", next_page_link['href'])
-                pages_searched += 1
-                print(f"    Suche weiter auf nächster Kategorie-Seite ({pages_searched})")
-            else:
-                print(f"    Keine weitere Kategorie-Seite gefunden nach {pages_searched} Seiten")
-                break
-                
-        except Exception as e:
-            print(f"Fehler beim Suchen der Kategorie-Seite: {e}")
+                # Falls kein expliziter "next" Text, nimm den ersten pagefrom Link
+                if not next_page_link and pagefrom_links:
+                    next_page_link = pagefrom_links[0]
+        
+        if next_page_link and next_page_link.get('href'):
+            category_url = urllib.parse.urljoin("https://en.wikipedia.org", next_page_link['href'])
+            pages_searched += 1
+            print(f"    Suche weiter auf nächster Kategorie-Seite ({pages_searched})")
+        else:
+            print(f"    Keine weitere Kategorie-Seite gefunden nach {pages_searched} Seiten")
             break
     
     print(f"Letzte Seite nicht gefunden nach {pages_searched} Kategorie-Seiten - mache von aktueller Position weiter")
@@ -393,84 +403,88 @@ def get_current_category_page_url():
 
 def get_articles_from_single_category_page(category_url):
     """Sammelt alle Artikel von einer einzelnen Kategorie-Seite."""
-    try:
-        print(f"Lade Artikel von Kategorie-Seite: {category_url}")
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
-        }
-        resp = requests.get(category_url, timeout=60, headers=headers)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-        
-        page_articles = []
-        
-        # Links zu Personen-Artikeln sammeln
-        content_div = soup.find("div", {"id": "mw-content-text"})
-        if content_div:
-            links = content_div.find_all("a", href=lambda x: x and x.startswith("/wiki/") and ":" not in x.split("/wiki/")[1])
-            for link in links:
-                article_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
-                page_articles.append(article_url)
-        
-        # Nächste Kategorie-Seiten-URL finden (robuste Suche)
-        next_category_url = None
-        
-        # Methode 1: Suche nach "(next page)" Link
-        next_links = soup.find_all("a", string=lambda text: text and text.strip() == "(next page)")
-        if next_links:
-            next_page_link = next_links[0]
-            if next_page_link.get('href'):
-                next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", next_page_link['href'])
-                print(f"    Next-Page Link gefunden: {next_page_link.get('href')}")
-        
-        # Methode 2: Fallback - Suche nach Link mit "next" Text  
-        if not next_category_url:
-            all_links = soup.find_all("a", href=True)
-            for link in all_links:
-                link_text = link.get_text().strip().lower()
-                if "next page" in link_text or link_text == "next":
-                    next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
-                    print(f"    Fallback Next-Link gefunden: {link['href']}")
-                    break
-        
-        # Methode 3: Suche nach pagefrom Parameter in URLs
-        if not next_category_url:
-            pagefrom_links = soup.find_all("a", href=lambda x: x and "pagefrom=" in x)
-            if pagefrom_links:
-                # Filtere Links die nach der aktuellen Seite kommen
-                for link in pagefrom_links:
-                    if "(next page)" in str(link.parent) or "next" in link.get_text().lower():
-                        next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
-                        print(f"    Pagefrom Next-Link gefunden: {link['href']}")
-                        break
-                # Falls kein expliziter "next" Text, nimm den ersten pagefrom Link
-                if not next_category_url and pagefrom_links:
-                    next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", pagefrom_links[0]['href'])
-                    print(f"    Erster Pagefrom-Link gefunden: {pagefrom_links[0]['href']}")
-        
-        # Methode 4: Suche in Navigation-Elementen
-        if not next_category_url:
-            nav_elements = soup.find_all(['div', 'span'], class_=lambda x: x and ('mw-category-group' in x or 'pager' in x))
-            for nav in nav_elements:
-                links = nav.find_all("a", href=True)
+    # Unendliche Retry-Schleife - niemals aufgeben!
+    while True:
+        try:
+            print(f"Lade Artikel von Kategorie-Seite: {category_url}")
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+            }
+            resp = requests.get(category_url, timeout=60, headers=headers)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+            
+            page_articles = []
+            
+            # Links zu Personen-Artikeln sammeln
+            content_div = soup.find("div", {"id": "mw-content-text"})
+            if content_div:
+                links = content_div.find_all("a", href=lambda x: x and x.startswith("/wiki/") and ":" not in x.split("/wiki/")[1])
                 for link in links:
-                    if "pagefrom=" in link.get('href', ''):
+                    article_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
+                    page_articles.append(article_url)
+            
+            # Nächste Kategorie-Seiten-URL finden (robuste Suche)
+            next_category_url = None
+            
+            # Methode 1: Suche nach "(next page)" Link
+            next_links = soup.find_all("a", string=lambda text: text and text.strip() == "(next page)")
+            if next_links:
+                next_page_link = next_links[0]
+                if next_page_link.get('href'):
+                    next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", next_page_link['href'])
+                    print(f"    Next-Page Link gefunden: {next_page_link.get('href')}")
+            
+            # Methode 2: Fallback - Suche nach Link mit "next" Text  
+            if not next_category_url:
+                all_links = soup.find_all("a", href=True)
+                for link in all_links:
+                    link_text = link.get_text().strip().lower()
+                    if "next page" in link_text or link_text == "next":
                         next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
-                        print(f"    Navigation Next-Link gefunden: {link['href']}")
+                        print(f"    Fallback Next-Link gefunden: {link['href']}")
                         break
-                if next_category_url:
-                    break
-        
-        if next_category_url:
-            print(f"✓ {len(page_articles)} Artikel von dieser Kategorie-Seite geladen, nächste Seite verfügbar")
-        else:
-            print(f"✓ {len(page_articles)} Artikel von dieser Kategorie-Seite geladen, keine weitere Seite gefunden")
-        
-        return page_articles, next_category_url
-        
-    except Exception as e:
-        print(f"Fehler beim Laden der Kategorie-Seite {category_url}: {e}")
-        return [], None
+            
+            # Methode 3: Suche nach pagefrom Parameter in URLs
+            if not next_category_url:
+                pagefrom_links = soup.find_all("a", href=lambda x: x and "pagefrom=" in x)
+                if pagefrom_links:
+                    # Filtere Links die nach der aktuellen Seite kommen
+                    for link in pagefrom_links:
+                        if "(next page)" in str(link.parent) or "next" in link.get_text().lower():
+                            next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
+                            print(f"    Pagefrom Next-Link gefunden: {link['href']}")
+                            break
+                    # Falls kein expliziter "next" Text, nimm den ersten pagefrom Link
+                    if not next_category_url and pagefrom_links:
+                        next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", pagefrom_links[0]['href'])
+                        print(f"    Erster Pagefrom-Link gefunden: {pagefrom_links[0]['href']}")
+            
+            # Methode 4: Suche in Navigation-Elementen
+            if not next_category_url:
+                nav_elements = soup.find_all(['div', 'span'], class_=lambda x: x and ('mw-category-group' in x or 'pager' in x))
+                for nav in nav_elements:
+                    links = nav.find_all("a", href=True)
+                    for link in links:
+                        if "pagefrom=" in link.get('href', ''):
+                            next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
+                            print(f"    Navigation Next-Link gefunden: {link['href']}")
+                            break
+                    if next_category_url:
+                        break
+            
+            if next_category_url:
+                print(f"✓ {len(page_articles)} Artikel von dieser Kategorie-Seite geladen, nächste Seite verfügbar")
+            else:
+                print(f"✓ {len(page_articles)} Artikel von dieser Kategorie-Seite geladen, keine weitere Seite gefunden")
+            
+            return page_articles, next_category_url
+            
+        except Exception as e:
+            print(f"⚠️ Netzwerkfehler beim Laden der Kategorie-Seite {category_url}: {e}")
+            print("⏳ Warte 60 Sekunden und versuche es erneut...")
+            time.sleep(60)
+            # Schleife läuft weiter - niemals aufgeben!
 
 def is_page_already_crawled(page_url):
     """Da wir keine Datei lesen - immer False (keine Duplikate erkennen)."""
@@ -541,13 +555,22 @@ def crawl_images():
             current_article_data.clear()
 
             try:
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
-                }
-                resp = requests.get(url, timeout=60, headers=headers)
-                resp.raise_for_status()
+                # Unendliche Retry-Schleife bei Netzwerkfehlern
+                while True:
+                    try:
+                        headers = {
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+                        }
+                        resp = requests.get(url, timeout=60, headers=headers)
+                        resp.raise_for_status()
+                        break  # Erfolgreich geladen, verlasse Retry-Schleife
+                    except Exception as e:
+                        print(f"⚠️ Netzwerkfehler beim Laden der Seite {url}: {e}")
+                        print("⏳ Warte 30 Sekunden und versuche es erneut...")
+                        time.sleep(30)
+                        # Retry-Schleife läuft weiter - niemals aufgeben!
             except Exception as e:
-                print(f"Fehler beim Laden der Seite {url}: {e}")
+                print(f"Unerwarteter Fehler beim Laden der Seite {url}: {e}")
                 continue
 
             soup = BeautifulSoup(resp.text, "html.parser")
@@ -600,8 +623,10 @@ def crawl_images():
             
         current_category_url = next_category_url
         if not current_category_url:
-            print("Keine weiteren Kategorie-Seiten gefunden - Crawling abgeschlossen")
-            break
+            print("⚠️ Keine weiteren Kategorie-Seiten gefunden - starte vom Anfang...")
+            # Statt zu stoppen, fange von vorne an
+            current_category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
+            time.sleep(300)  # 5 Minuten warten bevor Neustart
 
     print(f"Crawling abgeschlossen. {entries_saved} neue Einträge zur Datenbank hinzugefügt.")
 
