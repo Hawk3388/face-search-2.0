@@ -264,12 +264,14 @@ def download_image(img_url):
             if len(response.content) > 2 * 1024 * 1024:  # 2MB Limit
                 print(f"Überspringe zu großes Bild ({len(response.content)/1024/1024:.1f}MB): {img_url}")
                 return None
+            
+            time.sleep(0.2)
                 
             return response.content
         except Exception as e:
             print(f"⚠️ Netzwerkfehler beim Herunterladen von {img_url}: {e}")
-            print("⏳ Warte 30 Sekunden und versuche es erneut...")
-            time.sleep(30)
+            print("⏳ Warte 120 Sekunden und versuche es erneut...")
+            time.sleep(120)
             # Schleife läuft weiter - niemals aufgeben!
 
 def process_image(image, image_bytes, img_url, page_url):

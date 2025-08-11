@@ -25,3 +25,5 @@ ping raspberrypi.local
 nano last_crawled_page.txt
 
 ls -l last_crawled_page.txt
+
+source venv/bin/activate
