@@ -30,6 +30,10 @@ import urllib.robotparser  # Für robots.txt Respekt
 CRAWL_DELAY = 1.0  # 1 Sekunde zwischen Requests (mehr als empfohlene 100ms)
 USER_AGENT = "FaceSearchBot/1.0 (Educational Research; Contact: github.com/Hawk3388/face-search-2.0)"
 
+# Globaler Zähler für aufeinanderfolgende 429-Fehler
+consecutive_429_errors = 0
+MAX_CONSECUTIVE_429 = 10  # Nach 10 aufeinanderfolgenden 429-Fehlern stoppen
+
 # Robots.txt Parser für Wikipedia
 def check_robots_txt(url):
     """Prüft ob die URL laut robots.txt erlaubt ist."""
@@ -255,6 +259,8 @@ def is_internal_link(base_url, link):
         return base_domain == link_domain or link_domain == ""
 
 def download_image(img_url):
+    global consecutive_429_errors
+    
     # Nur kompatible Bildformate zulassen
     allowed_exts = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
     if not any(img_url.lower().endswith(ext) for ext in allowed_exts):
@@ -267,10 +273,9 @@ def download_image(img_url):
         print(f"Überspringe Wikipedia-Logo: {img_url}")
         return None
     
-    # Unendliche Retry-Schleife - niemals aufgeben!
-    attempt = 0
-    while True:
-        attempt += 1
+    # Maximal 3 Versuche pro Bild
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
         try:
             # Respektiere robots.txt
             if not check_robots_txt(img_url):
@@ -283,7 +288,7 @@ def download_image(img_url):
                 "Connection": "close"
             }
             
-            print(f"📥 Lade Bild herunter (Versuch {attempt}): {img_url}")
+            print(f"📥 Lade Bild herunter (Versuch {attempt}/{max_attempts}): {img_url}")
             
             response = requests.get(img_url, timeout=30, headers=headers, stream=True)
             response.raise_for_status()
@@ -303,45 +308,73 @@ def download_image(img_url):
             
             print(f"✅ Bild erfolgreich heruntergeladen ({len(image_bytes)/1024:.1f}KB)")
             
+            # Erfolgreicher Download - reset 429 counter
+            consecutive_429_errors = 0
+            
             # Ethisches Crawling: Respektiere Crawl-Delay
             time.sleep(CRAWL_DELAY)
             return image_bytes
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 429:  # Too Many Requests
-                # Bei Rate-Limiting progressiv länger warten
-                if attempt <= 5:
-                    wait_time = 300  # 5 Minuten für erste Versuche
-                elif attempt <= 10:
-                    wait_time = 600  # 10 Minuten
-                elif attempt <= 15:
-                    wait_time = 1200  # 20 Minuten
-                else:
-                    wait_time = 1800  # 30 Minuten für hartnäckige Fälle
+                print(f"⚠️ Rate-Limit (429) erreicht für {img_url} (Versuch {attempt}/{max_attempts})")
                 
-                print(f"⚠️ Rate-Limit erreicht (429). Warte {wait_time//60} Minuten (Versuch {attempt})...")
-                time.sleep(wait_time)
-                continue
+                if attempt < max_attempts:
+                    wait_time = 60 * attempt  # 1, 2, 3, 4 Minuten
+                    print(f"⏳ Warte {wait_time} Sekunden vor nächstem Versuch...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    # Nur beim finalen Fehlschlag des Bildes den 429-Zähler erhöhen
+                    consecutive_429_errors += 1
+                    print(f"❌ Überspringe Bild nach {max_attempts} Versuchen mit 429-Fehlern")
+                    print(f"📊 Aufeinanderfolgende Bilder mit 429-Fehler: {consecutive_429_errors}/{MAX_CONSECUTIVE_429}")
+                    
+                    # Prüfe ob wir das Limit für aufeinanderfolgende 429-Fehler erreicht haben
+                    if consecutive_429_errors >= MAX_CONSECUTIVE_429:
+                        print(f"🚨 KRITISCH: {MAX_CONSECUTIVE_429} aufeinanderfolgende Bilder mit 429-Fehlern!")
+                        print("🛑 Das deutet auf eine dauerhafte Sperrung hin - stoppe Crawler!")
+                        save_database()
+                        close_database()
+                        sys.exit(1)
+                    
+                    return None
             else:
                 print(f"⚠️ HTTP-Fehler {e.response.status_code} für {img_url}")
-                wait_time = min(60 * attempt, 300)  # Max 5 Minuten
+                if attempt < max_attempts:
+                    wait_time = min(30 * attempt, 300)  # Max 5 Minuten
+                    print(f"⏳ Warte {wait_time} Sekunden...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"❌ Überspringe Bild nach {max_attempts} Versuchen")
+                    return None
+                    
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️ Netzwerkfehler (Versuch {attempt}/{max_attempts}): {e}")
+            if attempt < max_attempts:
+                wait_time = min(30 * attempt, 300)  # Max 5 Minuten
                 print(f"⏳ Warte {wait_time} Sekunden...")
                 time.sleep(wait_time)
                 continue
-                    
-        except requests.exceptions.RequestException as e:
-            print(f"⚠️ Netzwerkfehler (Versuch {attempt}): {e}")
-            wait_time = min(30 * attempt, 300)  # Max 5 Minuten
-            print(f"⏳ Warte {wait_time} Sekunden...")
-            time.sleep(wait_time)
-            continue
+            else:
+                print(f"❌ Überspringe Bild nach {max_attempts} Versuchen")
+                return None
         
         except Exception as e:
-            print(f"⚠️ Unerwarteter Fehler (Versuch {attempt}): {e}")
-            wait_time = min(30 * attempt, 300)  # Max 5 Minuten
-            print(f"⏳ Warte {wait_time} Sekunden...")
-            time.sleep(wait_time)
-            continue
+            print(f"⚠️ Unerwarteter Fehler (Versuch {attempt}/{max_attempts}): {e}")
+            if attempt < max_attempts:
+                wait_time = min(30 * attempt, 300)  # Max 5 Minuten
+                print(f"⏳ Warte {wait_time} Sekunden...")
+                time.sleep(wait_time)
+                continue
+            else:
+                print(f"❌ Überspringe Bild nach {max_attempts} Versuchen")
+                return None
+    
+    # Falls alle Versuche fehlschlagen
+    print(f"❌ Alle {max_attempts} Versuche für {img_url} fehlgeschlagen")
+    return None
 
 def process_image(image, image_bytes, img_url, page_url):
     try:
