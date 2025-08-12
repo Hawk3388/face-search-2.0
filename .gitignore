@@ -3,3 +3,4 @@ test*
 dlib/
 *.bak
 last_crawled_page.txt
+images/
