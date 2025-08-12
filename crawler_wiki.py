@@ -24,6 +24,23 @@ import signal
 import sys
 import gc  # Für Garbage Collection
 import time  # Für Wartezeiten bei Fehlern
+import urllib.robotparser  # Für robots.txt Respekt
+
+# Ethisches Scraping - respektiere Wikipedia's Richtlinien
+CRAWL_DELAY = 1.0  # 1 Sekunde zwischen Requests (mehr als empfohlene 100ms)
+USER_AGENT = "FaceSearchBot/1.0 (Educational Research; Contact: github.com/Hawk3388/face-search-2.0)"
+
+# Robots.txt Parser für Wikipedia
+def check_robots_txt(url):
+    """Prüft ob die URL laut robots.txt erlaubt ist."""
+    try:
+        rp = urllib.robotparser.RobotFileParser()
+        rp.set_url(urllib.parse.urljoin(url, '/robots.txt'))
+        rp.read()
+        return rp.can_fetch(USER_AGENT, url)
+    except:
+        # Bei Fehlern beim Lesen von robots.txt - erlaube den Zugriff
+        return True
 
 queue = deque()  # Globale Queue für Signal-Handler
 
@@ -251,28 +268,80 @@ def download_image(img_url):
         return None
     
     # Unendliche Retry-Schleife - niemals aufgeben!
+    attempt = 0
     while True:
+        attempt += 1
         try:
-            # Gleichen User-Agent wie beim Crawlen verwenden
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
-            }
-            response = requests.get(img_url, timeout=60, headers=headers)
-            response.raise_for_status()
-            
-            # Bildgröße begrenzen um Memory-Probleme zu vermeiden
-            if len(response.content) > 2 * 1024 * 1024:  # 2MB Limit
-                print(f"Überspringe zu großes Bild ({len(response.content)/1024/1024:.1f}MB): {img_url}")
+            # Respektiere robots.txt
+            if not check_robots_txt(img_url):
+                print(f"⚠️ robots.txt verbietet Zugriff auf: {img_url}")
                 return None
             
-            time.sleep(0.2)
+            headers = {
+                "User-Agent": USER_AGENT,
+                "Accept": "image/*",
+                "Connection": "close"
+            }
+            
+            print(f"📥 Lade Bild herunter (Versuch {attempt}): {img_url}")
+            
+            response = requests.get(img_url, timeout=30, headers=headers, stream=True)
+            response.raise_for_status()
+            
+            # Größencheck vor dem vollständigen Download
+            content_length = response.headers.get('content-length')
+            if content_length and int(content_length) > 2 * 1024 * 1024:  # 2MB
+                print(f"⚠️ Bild zu groß ({int(content_length)/1024/1024:.1f}MB): {img_url}")
+                return None
+            
+            # Vollständiger Download
+            image_bytes = response.content
+            if len(image_bytes) > 2 * 1024 * 1024:
+                size_mb = len(image_bytes) / 1024 / 1024
+                print(f"⚠️ Bild zu groß ({size_mb:.1f}MB): {img_url}")
+                return None
+            
+            print(f"✅ Bild erfolgreich heruntergeladen ({len(image_bytes)/1024:.1f}KB)")
+            
+            # Ethisches Crawling: Respektiere Crawl-Delay
+            time.sleep(CRAWL_DELAY)
+            return image_bytes
+            
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 429:  # Too Many Requests
+                # Bei Rate-Limiting progressiv länger warten
+                if attempt <= 5:
+                    wait_time = 300  # 5 Minuten für erste Versuche
+                elif attempt <= 10:
+                    wait_time = 600  # 10 Minuten
+                elif attempt <= 15:
+                    wait_time = 1200  # 20 Minuten
+                else:
+                    wait_time = 1800  # 30 Minuten für hartnäckige Fälle
                 
-            return response.content
+                print(f"⚠️ Rate-Limit erreicht (429). Warte {wait_time//60} Minuten (Versuch {attempt})...")
+                time.sleep(wait_time)
+                continue
+            else:
+                print(f"⚠️ HTTP-Fehler {e.response.status_code} für {img_url}")
+                wait_time = min(60 * attempt, 300)  # Max 5 Minuten
+                print(f"⏳ Warte {wait_time} Sekunden...")
+                time.sleep(wait_time)
+                continue
+                    
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️ Netzwerkfehler (Versuch {attempt}): {e}")
+            wait_time = min(30 * attempt, 300)  # Max 5 Minuten
+            print(f"⏳ Warte {wait_time} Sekunden...")
+            time.sleep(wait_time)
+            continue
+        
         except Exception as e:
-            print(f"⚠️ Netzwerkfehler beim Herunterladen von {img_url}: {e}")
-            print("⏳ Warte 120 Sekunden und versuche es erneut...")
-            time.sleep(120)
-            # Schleife läuft weiter - niemals aufgeben!
+            print(f"⚠️ Unerwarteter Fehler (Versuch {attempt}): {e}")
+            wait_time = min(30 * attempt, 300)  # Max 5 Minuten
+            print(f"⏳ Warte {wait_time} Sekunden...")
+            time.sleep(wait_time)
+            continue
 
 def process_image(image, image_bytes, img_url, page_url):
     try:
@@ -340,11 +409,14 @@ def get_current_category_page_url():
         while True:
             try:
                 headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+                    "User-Agent": USER_AGENT
                 }
                 resp = requests.get(category_url, timeout=60, headers=headers)
                 resp.raise_for_status()
                 soup = BeautifulSoup(resp.text, "html.parser")
+                
+                # Ethisches Crawling: Crawl-Delay respektieren
+                time.sleep(CRAWL_DELAY)
                 break  # Erfolgreich geladen, verlasse Retry-Schleife
             except Exception as e:
                 print(f"⚠️ Netzwerkfehler beim Suchen der Kategorie-Seite {category_url}: {e}")
@@ -410,11 +482,14 @@ def get_articles_from_single_category_page(category_url):
         try:
             print(f"Lade Artikel von Kategorie-Seite: {category_url}")
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+                "User-Agent": USER_AGENT
             }
             resp = requests.get(category_url, timeout=60, headers=headers)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
+            
+            # Ethisches Crawling: Crawl-Delay respektieren
+            time.sleep(CRAWL_DELAY)
             
             page_articles = []
             
@@ -561,10 +636,13 @@ def crawl_images():
                 while True:
                     try:
                         headers = {
-                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+                            "User-Agent": USER_AGENT
                         }
                         resp = requests.get(url, timeout=60, headers=headers)
                         resp.raise_for_status()
+                        
+                        # Ethisches Crawling: Crawl-Delay respektieren
+                        time.sleep(CRAWL_DELAY)
                         break  # Erfolgreich geladen, verlasse Retry-Schleife
                     except Exception as e:
                         print(f"⚠️ Netzwerkfehler beim Laden der Seite {url}: {e}")
