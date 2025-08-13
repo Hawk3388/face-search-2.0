@@ -1,12 +1,8 @@
 import json
 import imagehash
-from PIL import Image
-from io import BytesIO
-import requests
 from collections import defaultdict
 import shutil
 import os
-from datetime import datetime
 
 def load_database(path="face_embeddings.json"):
     """Lädt die Gesichts-Datenbank"""
@@ -30,8 +26,7 @@ def str_to_phash(phash_str):
 
 def create_backup(original_file):
     """Erstellt ein Backup der ursprünglichen Datei"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_file = f"{original_file}.backup_{timestamp}"
+    backup_file = "face_embeddings_backup.json"
     try:
         shutil.copy2(original_file, backup_file)
         print(f"✅ Backup erstellt: {backup_file}")
@@ -42,7 +37,7 @@ def create_backup(original_file):
 
 def find_hash_duplicates(database, hash_threshold=5):
     """
-    Findet Duplikate basierend auf phash-Vergleich
+    Findet Duplikate basierend auf phash-Vergleich (ultra-optimierte Version mit LSH)
     
     Args:
         database: Liste der Datenbankeinträge
@@ -53,51 +48,100 @@ def find_hash_duplicates(database, hash_threshold=5):
     """
     print(f"🔍 Suche nach Duplikaten mit Hash-Schwellenwert: {hash_threshold}")
     
+    # Alle gültigen Hashes mit ihren Indizes sammeln
+    print("📋 Lade und validiere Hashes...")
+    valid_entries = []
+    for i, entry in enumerate(database):
+        phash = str_to_phash(entry.get("phash", ""))
+        if phash is not None:
+            # Konvertiere Hash zu Integer für schnellere Vergleiche
+            hash_int = int(str(phash), 16)
+            valid_entries.append({
+                "index": i,
+                "entry": entry,
+                "phash": phash,
+                "hash_int": hash_int
+            })
+    
+    print(f"✅ {len(valid_entries)} von {len(database)} Einträgen haben gültige Hashes")
+    
+    if len(valid_entries) < 2:
+        print("❌ Nicht genug gültige Hashes für Vergleich")
+        return []
+    
+    print("🚀 Verwende Bucket-basierte Optimierung...")
+    
+    # Bucket-basierte Vorsortierung für massive Speedup
+    # Gruppiere Hashes nach ihren ersten 16 Bits (65536 Buckets)
+    buckets = defaultdict(list)
+    for entry in valid_entries:
+        bucket_key = entry["hash_int"] >> 48  # Erste 16 Bits
+        buckets[bucket_key].append(entry)
+    
     duplicate_groups = []
-    processed_indices = set()
+    processed_global = set()
+    total_comparisons = 0
     
-    total_entries = len(database)
-    
-    for i, entry1 in enumerate(database):
-        if i in processed_indices:
-            continue
-            
-        # Fortschritt anzeigen
-        if i % 100 == 0:
-            print(f"Fortschritt: {i}/{total_entries} ({i/total_entries*100:.1f}%)")
+    print("🔄 Verarbeite Buckets...")
+    bucket_count = 0
+    for bucket_key, bucket_entries in buckets.items():
+        bucket_count += 1
+        if bucket_count % 1000 == 0:
+            print(f"Bucket-Fortschritt: {bucket_count}/{len(buckets)}")
         
-        # phash des aktuellen Eintrags laden
-        phash1 = str_to_phash(entry1.get("phash", ""))
-        if phash1 is None:
+        if len(bucket_entries) < 2:
             continue
-            
-        current_group = [{"index": i, "entry": entry1}]
-        processed_indices.add(i)
         
-        # Mit allen anderen vergleichen
-        for j, entry2 in enumerate(database[i+1:], start=i+1):
-            if j in processed_indices:
+        # Nur innerhalb des Buckets vergleichen + angrenzende Buckets für Grenzfälle
+        candidates = bucket_entries.copy()
+        
+        # Füge ähnliche Buckets hinzu (für Hashes nahe der Bucket-Grenze)
+        for offset in [-1, 1]:
+            neighbor_key = bucket_key + offset
+            if neighbor_key in buckets:
+                candidates.extend(buckets[neighbor_key])
+        
+        # Dedupliziere candidates
+        seen_indices = set()
+        unique_candidates = []
+        for entry in candidates:
+            if entry["index"] not in seen_indices:
+                unique_candidates.append(entry)
+                seen_indices.add(entry["index"])
+        
+        # Schnelle Vergleiche innerhalb der Kandidaten
+        processed_local = set()
+        for i, entry1 in enumerate(unique_candidates):
+            if entry1["index"] in processed_global or i in processed_local:
                 continue
                 
-            phash2 = str_to_phash(entry2.get("phash", ""))
-            if phash2 is None:
-                continue
+            current_group = [entry1]
+            processed_local.add(i)
+            processed_global.add(entry1["index"])
             
-            # Hamming-Distanz berechnen
-            try:
-                distance = phash1 - phash2
+            for j in range(i + 1, len(unique_candidates)):
+                if j in processed_local:
+                    continue
+                    
+                entry2 = unique_candidates[j]
+                if entry2["index"] in processed_global:
+                    continue
+                
+                # Ultra-schneller Bit-XOR Vergleich
+                xor_result = entry1["hash_int"] ^ entry2["hash_int"]
+                distance = bin(xor_result).count('1')  # Hamming-Distanz
+                total_comparisons += 1
+                
                 if distance <= hash_threshold:
-                    current_group.append({"index": j, "entry": entry2})
-                    processed_indices.add(j)
-            except Exception as e:
-                print(f"Fehler beim Vergleichen der Hashes: {e}")
-                continue
-        
-        # Nur Gruppen mit mehr als einem Eintrag sind Duplikate
-        if len(current_group) > 1:
-            duplicate_groups.append(current_group)
+                    current_group.append(entry2)
+                    processed_local.add(j)
+                    processed_global.add(entry2["index"])
+            
+            if len(current_group) > 1:
+                duplicate_groups.append(current_group)
     
     print(f"✅ Fertig! {len(duplicate_groups)} Duplikat-Gruppen gefunden")
+    print(f"🚀 Nur {total_comparisons:,} Vergleiche statt {len(valid_entries)*(len(valid_entries)-1)//2:,} (Speedup: {(len(valid_entries)*(len(valid_entries)-1)//2)/max(total_comparisons,1):.1f}x)")
     return duplicate_groups
 
 def analyze_duplicates(duplicate_groups):

@@ -4,3 +4,5 @@ dlib/
 *.bak
 last_crawled_page.txt
 images/
+commands.txt
+pycache/
