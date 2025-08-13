@@ -1,10 +1,6 @@
 import time
-import json
-import imagehash
-from PIL import Image
 import random
-import string
-from clean_db import find_hash_duplicates, str_to_phash
+from clean_db import find_hash_duplicates
 
 def generate_test_data(count=40000):
     """Generiert Testdaten mit echten phash-Werten"""
