@@ -15,7 +15,7 @@ with open("face_embeddings.json", "r") as f:
     try:
         face_db = json.load(f)
     except json.JSONDecodeError:
-        print("Fehler beim Laden der Gesichts-Datenbank. Stelle sicher, dass die Datei korrekt formatiert ist.")
+        print("Error loading face database. Make sure the file is correctly formatted.")
         face_db = []
 
 # --- Common Crawl Einstellungen ---
@@ -37,7 +37,7 @@ def search_cc_index(url):
             records = resp.text.strip().split('\n')
             return [json.loads(r) for r in records]
     except Exception as e:
-        print(f"Fehler bei Common Crawl Index Suche für {url}: {e}")
+        print(f"Error in Common Crawl index search for {url}: {e}")
     return []
 
 def fetch_page_from_cc(records):
@@ -53,20 +53,20 @@ def fetch_page_from_cc(records):
                     if warc_record.rec_type == 'response':
                         return warc_record.content_stream().read()
         except Exception as e:
-            print(f"Fehler beim Laden der Seite aus Common Crawl: {e}")
+            print(f"Error loading page from Common Crawl: {e}")
     return None
 
 def download_image(img_url):
     allowed_exts = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
     if not any(img_url.lower().endswith(ext) for ext in allowed_exts):
-        print(f"Überspringe inkompatibles Bildformat: {img_url}")
+        print(f"Skipping incompatible image format: {img_url}")
         return None
     try:
         response = requests.get(img_url, timeout=10)
         response.raise_for_status()
         return response.content
     except Exception as e:
-        print(f"Fehler beim Herunterladen von {img_url}: {e}")
+        print(f"Error downloading {img_url}: {e}")
         return None
 
 def process_image(image, image_bytes, img_url, page_url):
@@ -82,16 +82,16 @@ def process_image(image, image_bytes, img_url, page_url):
                 "phash": str(phash)
             }
             face_db.append(entry)
-            print(f"Gesicht gefunden in {img_url}")
+            print(f"Face found in {img_url}")
     except Exception as e:
-        print(f"Fehler beim Verarbeiten von Bild {img_url}: {e}")
+        print(f"Error processing image {img_url}: {e}")
 
 def bild_bytes_enthält_gesicht(image):
     try:
         gesichter = face_recognition.face_locations(image)
         return len(gesichter) > 0
     except Exception as e:
-        print(f"Fehler beim Prüfen des Bilds: {e}")
+        print(f"Error checking image: {e}")
         return False
 
 def get_phash(image_bytes):
@@ -103,7 +103,7 @@ def str_to_phash(phash_str):
     try:
         return imagehash.hex_to_hash(phash_str)
     except ValueError as e:
-        print(f"Fehler beim Konvertieren des phash: {e}")
+        print(f"Error converting phash: {e}")
         return None
 
 def compare_hashes(phash):
@@ -119,26 +119,26 @@ def crawl_images(start_url, max_pages=1000):
         url = queue.popleft()
         if url in visited_pages:
             continue
-        print(f"Crawle Seite: {url} ({len(visited_pages)+1}/{max_pages})")
+        print(f"Crawling page: {url} ({len(visited_pages)+1}/{max_pages})")
         visited_pages.add(url)
 
         # Suche Seite im Common Crawl Index
         records = search_cc_index(url)
         if not records:
-            print(f"Keine Daten für {url} im Common Crawl gefunden.")
+            print(f"No data found for {url} in Common Crawl.")
             continue
 
         # Lade Seite von Common Crawl
         page_bytes = fetch_page_from_cc(records)
         if not page_bytes:
-            print(f"Seite {url} konnte nicht geladen werden.")
+            print(f"Page {url} could not be loaded.")
             continue
 
         # Parse HTML mit BeautifulSoup
         try:
             soup = BeautifulSoup(page_bytes, "html.parser")
         except Exception as e:
-            print(f"Fehler beim Parsen der Seite {url}: {e}")
+            print(f"Error parsing page {url}: {e}")
             continue
 
         # Bilder finden und herunterladen
@@ -168,5 +168,5 @@ def crawl_images(start_url, max_pages=1000):
             json.dump(face_db, f, indent=2)
 
 if __name__ == "__main__":
-    start_url = "https://www.imdb.com/list/ls524618334/"  # Deine Startseite
-    crawl_images(start_url, max_pages=100)  # max_pages anpassen
+    start_url = "https://www.imdb.com/list/ls524618334/"  # Your starting page
+    crawl_images(start_url, max_pages=100)  # Adjust max_pages

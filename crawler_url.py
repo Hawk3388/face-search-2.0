@@ -1,9 +1,9 @@
 import os
-# CUDA-Pfade für dlib/face_recognition setzen
+# Set CUDA paths for dlib/face_recognition
 cuda_path = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1"
 cudnn_path = r"C:\Program Files\NVIDIA\CUDNN\v9.6\bin\12.6"
 
-# CUDA-Bibliotheken zum PATH hinzufügen
+# Add CUDA libraries to PATH
 if os.path.exists(cuda_path):
     os.environ['PATH'] = cuda_path + r'\bin;' + os.environ.get('PATH', '')
 
@@ -24,29 +24,29 @@ import shutil
 visited_pages = set()
 
 def create_backup():
-    """Erstellt eine Sicherheitskopie der face_embeddings.json Datei"""
+    """Creates a backup copy of the face_embeddings.json file"""
     db_file = "face_embeddings.json"
     if os.path.exists(db_file):
-        # Zeitstempel für Backup-Namen
+        # Timestamp for backup name
         backup_file = f"face_embeddings_backup.json"
         
         try:
             shutil.copy2(db_file, backup_file)
-            print(f"Sicherheitskopie erstellt: {backup_file}")
+            print(f"Backup created: {backup_file}")
         except Exception as e:
-            print(f"Fehler beim Erstellen der Sicherheitskopie: {e}")
+            print(f"Error creating backup: {e}")
     else:
-        print("Keine bestehende Datenbank gefunden - keine Sicherheitskopie erstellt.")
+        print("No existing database found - no backup created.")
 
-# Sicherheitskopie beim Start erstellen
+# Create backup at startup
 create_backup()
 
-# Gesichts-Datenbank laden oder erstellen
+# Load or create face database
 try:
     with open("face_embeddings.json", "r") as f:
         face_db = json.load(f)
 except FileNotFoundError:
-    print("face_embeddings.json nicht gefunden. Erstelle neue Datenbank.")
+    print("face_embeddings.json not found. Creating new database.")
     face_db = []
 except json.JSONDecodeError:
     print("Fehler beim Laden der Gesichts-Datenbank. Stelle sicher, dass die Datei korrekt formatiert ist.")

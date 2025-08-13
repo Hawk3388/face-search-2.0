@@ -1,9 +1,9 @@
 import os
-# CUDA-Pfade für dlib/face_recognition setzen
+# Set CUDA paths for dlib/face_recognition
 cuda_path = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1"
 cudnn_path = r"C:\Program Files\NVIDIA\CUDNN\v9.6\bin\12.6"
 
-# CUDA-Bibliotheken zum PATH hinzufügen
+# Add CUDA libraries to PATH
 if os.path.exists(cuda_path):
     os.environ['PATH'] = cuda_path + r'\bin;' + os.environ.get('PATH', '')
 
@@ -22,34 +22,34 @@ import imagehash
 import shutil
 import signal
 import sys
-import gc  # Für Garbage Collection
-import time  # Für Wartezeiten bei Fehlern
-import urllib.robotparser  # Für robots.txt Respekt
+import gc  # For garbage collection
+import time  # For error waiting times
+import urllib.robotparser  # For robots.txt respect
 
-# Ethisches Scraping - respektiere Wikipedia's Richtlinien
-CRAWL_DELAY = 1.0  # 1 Sekunde zwischen Requests (mehr als empfohlene 100ms)
+# Ethical scraping - respect Wikipedia's guidelines
+CRAWL_DELAY = 1.0  # 1 second between requests (more than recommended 100ms)
 USER_AGENT = "FaceSearchBot/1.0 (Educational Research; Contact: github.com/Hawk3388/face-search-2.0)"
 
-# Globaler Zähler für aufeinanderfolgende 429-Fehler
+# Global counter for consecutive 429 errors
 consecutive_429_errors = 0
-MAX_CONSECUTIVE_429 = 10  # Nach 10 aufeinanderfolgenden 429-Fehlern stoppen
+MAX_CONSECUTIVE_429 = 10  # Stop after 10 consecutive 429 errors
 
-# Robots.txt Parser für Wikipedia
+# Robots.txt parser for Wikipedia
 def check_robots_txt(url):
-    """Prüft ob die URL laut robots.txt erlaubt ist."""
+    """Checks if the URL is allowed according to robots.txt."""
     try:
         rp = urllib.robotparser.RobotFileParser()
         rp.set_url(urllib.parse.urljoin(url, '/robots.txt'))
         rp.read()
         return rp.can_fetch(USER_AGENT, url)
     except:
-        # Bei Fehlern beim Lesen von robots.txt - erlaube den Zugriff
+        # On errors reading robots.txt - allow access
         return True
 
-queue = deque()  # Globale Queue für Signal-Handler
+queue = deque()  # Global queue for signal handler
 
 def save_database():
-    """Speichert die aktuellen Artikel-Daten mit append-only (absolut kein Lesen!)."""
+    """Saves the current article data with append-only (absolutely no reading!)."""
     global json_initialized, total_entries_saved
     
     if not current_article_data:
@@ -58,24 +58,24 @@ def save_database():
     try:
         db_file = "face_embeddings.json"
         
-        # Wenn JSON noch nicht initialisiert
+        # If JSON not yet initialized
         if not json_initialized:
             if not os.path.exists(db_file):
-                # Neue Datei - schreibe JSON-Array Anfang
+                # New file - write JSON array beginning
                 with open(db_file, "w") as f:
                     f.write("[\n")
                 is_first_entry = True
             else:
-                # Existierende Datei - entferne das schließende ] am Ende
+                # Existing file - remove closing ] at the end
                 remove_closing_bracket(db_file)
-                is_first_entry = False  # Datei hat bereits Einträge
+                is_first_entry = False  # File already has entries
             
-            # Datei als initialisiert markieren
+            # Mark file as initialized
             json_initialized = True
         else:
             is_first_entry = False
         
-        # Daten anhängen (append-only!)
+        # Append data (append-only!)
         with open(db_file, "a") as f:
             for i, entry in enumerate(current_article_data):
                 if not is_first_entry or i > 0:
@@ -83,116 +83,116 @@ def save_database():
                 f.write("  " + json.dumps(entry, indent=2).replace('\n', '\n  '))
                 is_first_entry = False
         
-        # Zähler aktualisieren und periodisches Backup prüfen
+        # Update counter and check periodic backup
         entries_added = len(current_article_data)
         total_entries_saved += entries_added
         create_periodic_backup(total_entries_saved)
         
-        print(f"{entries_added} neue Einträge zur Datenbank hinzugefügt. (Gesamt: {total_entries_saved})")
+        print(f"{entries_added} new entries added to database. (Total: {total_entries_saved})")
         
-        # Aktuelle Artikel-Daten nach dem Speichern leeren
+        # Clear current article data after saving
         current_article_data.clear()
     except Exception as e:
-        print(f"Fehler beim Speichern der Datenbank: {e}")
+        print(f"Error saving database: {e}")
 
 def remove_closing_bracket(filename):
-    """Entfernt das schließende ] am Ende der Datei ohne die Datei zu lesen."""
+    """Removes the closing ] at the end of the file without reading the file."""
     try:
-        # Öffne Datei im read+write Modus
+        # Open file in read+write mode
         with open(filename, "r+b") as f:
-            # Gehe zum Ende
+            # Go to end
             f.seek(0, 2)
             file_size = f.tell()
             
             if file_size < 10:
-                return  # Datei zu klein
+                return  # File too small
             
-            # Gehe zu den letzten Bytes und entferne ] und Whitespace
+            # Go to last bytes and remove ] and whitespace
             max_chars_to_check = min(10, file_size)
             f.seek(file_size - max_chars_to_check)
             
-            # Lese die letzten Bytes
+            # Read the last bytes
             end_content = f.read().decode('utf-8', errors='ignore')
             
-            # Finde Position des letzten ] 
+            # Find position of last ]
             bracket_pos = end_content.rfind(']')
             if bracket_pos != -1:
-                # Schneide ab der Position des ] ab
+                # Truncate from position of ]
                 new_end_pos = file_size - max_chars_to_check + bracket_pos
                 f.seek(new_end_pos)
                 f.truncate()
-                print("Schließendes ] entfernt für append-Modus.")
+                print("Closing ] removed for append mode.")
             
     except Exception as e:
-        print(f"Fehler beim Entfernen des schließenden ]: {e}")
+        print(f"Error removing closing ]: {e}")
 
 def close_database():
-    """Schließt die JSON-Array ordnungsgemäß ab."""
+    """Properly closes the JSON array."""
     global json_initialized
     try:
         db_file = "face_embeddings.json"
         if os.path.exists(db_file) and json_initialized:
             with open(db_file, "a") as f:
                 f.write("\n]")
-            print("Datenbank ordnungsgemäß geschlossen.")
-            # Flag zurücksetzen um doppeltes Schließen zu vermeiden
+            print("Database properly closed.")
+            # Reset flag to avoid double closing
             json_initialized = False
     except Exception as e:
-        print(f"Fehler beim Schließen der Datenbank: {e}")
+        print(f"Error closing database: {e}")
 
 def get_visited_pages_from_db():
-    """Da wir kein Lesen machen - leeres Set zurückgeben."""
+    """Since we don't do reading - return empty set."""
     return set()
 
 def get_last_crawled_page():
-    """Liest den letzten gecrawlten Artikel aus einer kleinen separaten Datei."""
+    """Reads the last crawled article from a small separate file."""
     try:
         if os.path.exists("last_crawled_page.txt"):
             with open("last_crawled_page.txt", "r", encoding="utf-8") as f:
                 last_page = f.read().strip()
                 if last_page:
-                    print(f"📄 Letzter gecrawlter Artikel: {last_page}")
+                    print(f"📄 Last crawled article: {last_page}")
                     return last_page
     except Exception as e:
-        print(f"Fehler beim Lesen der letzten Seite: {e}")
+        print(f"Error reading last page: {e}")
     return None
 
 def save_last_crawled_page(page_url):
-    """Speichert den aktuellen Artikel-URL in eine kleine separate Datei."""
+    """Saves the current article URL to a small separate file."""
     try:
         with open("last_crawled_page.txt", "w", encoding="utf-8") as f:
             f.write(page_url)
     except Exception as e:
-        print(f"Fehler beim Speichern der letzten Seite: {e}")
+        print(f"Error saving last page: {e}")
 
 def signal_handler(sig, frame):
-    """Handler für Unterbrechungssignale (Ctrl+C)."""
-    print("\nUnterbrechung erkannt! Speichere Datenbank...")
+    """Handler for interrupt signals (Ctrl+C)."""
+    print("\nInterrupt detected! Saving database...")
     save_database()
     close_database()
-    print("Crawler beendet.")
+    print("Crawler terminated.")
     sys.exit(0)
 
-# Signal-Handler registrieren
+# Register signal handlers
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 def create_backup():
-    """Erstellt ein Backup beim Start."""
+    """Creates a backup at startup."""
     try:
         db_file = "face_embeddings.json"
         if os.path.exists(db_file):
             backup_file = f"face_embeddings_backup.json"
             
             shutil.copy2(db_file, backup_file)
-            print(f"📁 Start-Backup erstellt: {backup_file}")
+            print(f"📁 Startup backup created: {backup_file}")
         else:
-            print("Keine bestehende Datenbank gefunden - kein Start-Backup erstellt.")
+            print("No existing database found - no startup backup created.")
     except Exception as e:
-        print(f"Fehler beim Erstellen des Start-Backups: {e}")
+        print(f"Error creating startup backup: {e}")
 
 def create_periodic_backup(entries_count):
-    """Erstellt alle 1000 Einträge ein Backup."""
+    """Creates a backup every 1000 entries."""
     try:
         if entries_count > 0 and entries_count % 1000 == 0:
             import datetime
@@ -201,50 +201,50 @@ def create_periodic_backup(entries_count):
                 backup_file = f"face_embeddings_backup.json"
                 
                 shutil.copy2(db_file, backup_file)
-                print(f"📁 Backup erstellt nach {entries_count} Einträgen: {backup_file}")
+                print(f"📁 Backup created after {entries_count} entries: {backup_file}")
     except Exception as e:
-        print(f"Fehler beim Erstellen des periodischen Backups: {e}")
+        print(f"Error creating periodic backup: {e}")
 
-# Backup beim Start überspringen
+# Skip backup at startup
 create_backup()
 
-# Globale Variable für aktuellen Artikel (RAM-sparend)
+# Global variable for current article (RAM-efficient)
 current_article_data = []
 
-# Flag ob die JSON-Datei bereits initialisiert wurde
+# Flag whether JSON file has been initialized
 json_initialized = False
 
-# Zähler für Backup-System
+# Counter for backup system
 total_entries_saved = 0
 
 def is_internal_link(base_url, link):
     base_domain = urllib.parse.urlparse(base_url).netloc
     link_domain = urllib.parse.urlparse(link).netloc
     
-    # Vollständige URLs für Vergleich erstellen
+    # Create complete URLs for comparison
     full_link = urllib.parse.urljoin(base_url, link)
     
-    # URLs ohne Fragment (Teil nach #) für Vergleich
+    # URLs without fragment (part after #) for comparison
     base_parsed = urllib.parse.urlparse(base_url)
     link_parsed = urllib.parse.urlparse(full_link)
     
     base_path = base_parsed.path
     link_path = link_parsed.path
     
-    # Self-Links ausschließen (Links die auf die gleiche Seite zeigen, auch mit #-Ankern)
+    # Exclude self-links (links pointing to the same page, even with # anchors)
     if base_path == link_path:
         return False
     
-    # Prüfen ob es sich um Wikipedia handelt
+    # Check if it's Wikipedia
     if "wikipedia.org" in base_domain:
-        # Für Wikipedia: nur Links zu anderen Wikipedia-Artikeln erlauben
+        # For Wikipedia: only allow links to other Wikipedia articles
         if link_domain == "" or link_domain == base_domain:
-            # Prüfen ob es ein Wikipedia-Artikel ist (nicht Talk, User, Special, etc.)
+            # Check if it's a Wikipedia article (not Talk, User, Special, etc.)
             path = link_path
             
-            # Wikipedia-Artikel haben das Format /wiki/Artikelname
+            # Wikipedia articles have the format /wiki/ArticleName
             if path.startswith("/wiki/") and ":" not in path.split("/wiki/")[1]:
-                # Ausschließen von speziellen Seiten
+                # Exclude special pages
                 excluded_prefixes = [
                     "Category:", "File:", "Template:", "Help:", "Special:", 
                     "User:", "Talk:", "User_talk:", "Wikipedia:", "MediaWiki:",
@@ -255,31 +255,31 @@ def is_internal_link(base_url, link):
                     return True
             return False
     else:
-        # Für andere Domains: normale Domain-Prüfung
+        # For other domains: normal domain check
         return base_domain == link_domain or link_domain == ""
 
 def download_image(img_url):
     global consecutive_429_errors
     
-    # Nur kompatible Bildformate zulassen
+    # Only allow compatible image formats
     allowed_exts = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
     if not any(img_url.lower().endswith(ext) for ext in allowed_exts):
-        print(f"Überspringe inkompatibles Bildformat: {img_url}")
+        print(f"Skipping incompatible image format: {img_url}")
         return None
     if ".svg" in img_url.lower():
-        print(f"Überspringe inkompatibles Bildformat: {img_url}")
+        print(f"Skipping incompatible image format: {img_url}")
         return None
     if img_url.lower().endswith("wikipedia.png"):
-        print(f"Überspringe Wikipedia-Logo: {img_url}")
+        print(f"Skipping Wikipedia logo: {img_url}")
         return None
     
-    # Maximal 3 Versuche pro Bild
+    # Maximum 3 attempts per image
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):
         try:
-            # Respektiere robots.txt
+            # Respect robots.txt
             if not check_robots_txt(img_url):
-                print(f"⚠️ robots.txt verbietet Zugriff auf: {img_url}")
+                print(f"⚠️ robots.txt forbids access to: {img_url}")
                 return None
             
             headers = {
@@ -288,92 +288,92 @@ def download_image(img_url):
                 "Connection": "close"
             }
             
-            print(f"📥 Lade Bild herunter (Versuch {attempt}/{max_attempts}): {img_url}")
+            print(f"📥 Downloading image (attempt {attempt}/{max_attempts}): {img_url}")
             
             response = requests.get(img_url, timeout=30, headers=headers, stream=True)
             response.raise_for_status()
             
-            # Größencheck vor dem vollständigen Download
+            # Size check before complete download
             content_length = response.headers.get('content-length')
             if content_length and int(content_length) > 2 * 1024 * 1024:  # 2MB
-                print(f"⚠️ Bild zu groß ({int(content_length)/1024/1024:.1f}MB): {img_url}")
+                print(f"⚠️ Image too large ({int(content_length)/1024/1024:.1f}MB): {img_url}")
                 return None
             
-            # Vollständiger Download
+            # Complete download
             image_bytes = response.content
             if len(image_bytes) > 2 * 1024 * 1024:
                 size_mb = len(image_bytes) / 1024 / 1024
-                print(f"⚠️ Bild zu groß ({size_mb:.1f}MB): {img_url}")
+                print(f"⚠️ Image too large ({size_mb:.1f}MB): {img_url}")
                 return None
             
-            print(f"✅ Bild erfolgreich heruntergeladen ({len(image_bytes)/1024:.1f}KB)")
+            print(f"✅ Image successfully downloaded ({len(image_bytes)/1024:.1f}KB)")
             
-            # Erfolgreicher Download - reset 429 counter
+            # Successful download - reset 429 counter
             consecutive_429_errors = 0
             
-            # Ethisches Crawling: Respektiere Crawl-Delay
+            # Ethical crawling: Respect crawl delay
             time.sleep(CRAWL_DELAY)
             return image_bytes
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 429:  # Too Many Requests
-                print(f"⚠️ Rate-Limit (429) erreicht für {img_url} (Versuch {attempt}/{max_attempts})")
+                print(f"⚠️ Rate limit (429) reached for {img_url} (attempt {attempt}/{max_attempts})")
                 
                 if attempt < max_attempts:
-                    wait_time = 60 * attempt  # 1, 2, 3, 4 Minuten
-                    print(f"⏳ Warte {wait_time} Sekunden vor nächstem Versuch...")
+                    wait_time = 60 * attempt  # 1, 2, 3, 4 minutes
+                    print(f"⏳ Waiting {wait_time} seconds before next attempt...")
                     time.sleep(wait_time)
                     continue
                 else:
-                    # Nur beim finalen Fehlschlag des Bildes den 429-Zähler erhöhen
+                    # Only increase 429 counter on final failure of the image
                     consecutive_429_errors += 1
-                    print(f"❌ Überspringe Bild nach {max_attempts} Versuchen mit 429-Fehlern")
-                    print(f"📊 Aufeinanderfolgende Bilder mit 429-Fehler: {consecutive_429_errors}/{MAX_CONSECUTIVE_429}")
+                    print(f"❌ Skipping image after {max_attempts} attempts with 429 errors")
+                    print(f"📊 Consecutive images with 429 errors: {consecutive_429_errors}/{MAX_CONSECUTIVE_429}")
                     
-                    # Prüfe ob wir das Limit für aufeinanderfolgende 429-Fehler erreicht haben
+                    # Check if we've reached the limit for consecutive 429 errors
                     if consecutive_429_errors >= MAX_CONSECUTIVE_429:
-                        print(f"🚨 KRITISCH: {MAX_CONSECUTIVE_429} aufeinanderfolgende Bilder mit 429-Fehlern!")
-                        print("🛑 Das deutet auf eine dauerhafte Sperrung hin - stoppe Crawler!")
+                        print(f"🚨 CRITICAL: {MAX_CONSECUTIVE_429} consecutive images with 429 errors!")
+                        print("🛑 This indicates a permanent block - stopping crawler!")
                         save_database()
                         close_database()
                         sys.exit(1)
                     
                     return None
             else:
-                print(f"⚠️ HTTP-Fehler {e.response.status_code} für {img_url}")
+                print(f"⚠️ HTTP error {e.response.status_code} for {img_url}")
                 if attempt < max_attempts:
-                    wait_time = min(30 * attempt, 300)  # Max 5 Minuten
-                    print(f"⏳ Warte {wait_time} Sekunden...")
+                    wait_time = min(30 * attempt, 300)  # Max 5 minutes
+                    print(f"⏳ Waiting {wait_time} seconds...")
                     time.sleep(wait_time)
                     continue
                 else:
-                    print(f"❌ Überspringe Bild nach {max_attempts} Versuchen")
+                    print(f"❌ Skipping image after {max_attempts} attempts")
                     return None
                     
         except requests.exceptions.RequestException as e:
-            print(f"⚠️ Netzwerkfehler (Versuch {attempt}/{max_attempts}): {e}")
+            print(f"⚠️ Network error (attempt {attempt}/{max_attempts}): {e}")
             if attempt < max_attempts:
-                wait_time = min(30 * attempt, 300)  # Max 5 Minuten
-                print(f"⏳ Warte {wait_time} Sekunden...")
+                wait_time = min(30 * attempt, 300)  # Max 5 minutes
+                print(f"⏳ Waiting {wait_time} seconds...")
                 time.sleep(wait_time)
                 continue
             else:
-                print(f"❌ Überspringe Bild nach {max_attempts} Versuchen")
+                print(f"❌ Skipping image after {max_attempts} attempts")
                 return None
         
         except Exception as e:
-            print(f"⚠️ Unerwarteter Fehler (Versuch {attempt}/{max_attempts}): {e}")
+            print(f"⚠️ Unexpected error (attempt {attempt}/{max_attempts}): {e}")
             if attempt < max_attempts:
-                wait_time = min(30 * attempt, 300)  # Max 5 Minuten
-                print(f"⏳ Warte {wait_time} Sekunden...")
+                wait_time = min(30 * attempt, 300)  # Max 5 minutes
+                print(f"⏳ Waiting {wait_time} seconds...")
                 time.sleep(wait_time)
                 continue
             else:
-                print(f"❌ Überspringe Bild nach {max_attempts} Versuchen")
+                print(f"❌ Skipping image after {max_attempts} attempts")
                 return None
     
     # Falls alle Versuche fehlschlagen
-    print(f"❌ Alle {max_attempts} Versuche für {img_url} fehlgeschlagen")
+    print(f"❌ All {max_attempts} attempts failed for {img_url}")
     return None
 
 def process_image(image, image_bytes, img_url, page_url):
@@ -388,18 +388,18 @@ def process_image(image, image_bytes, img_url, page_url):
                 "embedding": embedding,
                 "phash": str(phash)
             }
-            # Zu aktuellen Artikel-Daten hinzufügen (RAM-effizient)
+            # Add to current article data (memory-efficient)
             current_article_data.append(entry)
-            print(f"Gesicht gefunden in {img_url}")
+            print(f"Face found in {img_url}")
     except Exception as e:
-        print(f"Fehler beim Verarbeiten von Bild {img_url}: {e}")
+        print(f"Error processing image {img_url}: {e}")
 
-def bild_bytes_enthält_gesicht(image):
+def image_bytes_contains_face(image):
     try:
-        gesichter = face_recognition.face_locations(image)
-        return len(gesichter) > 0
+        faces = face_recognition.face_locations(image)
+        return len(faces) > 0
     except Exception as e:
-        print(f"Fehler beim Prüfen des Bilds: {e}")
+        print(f"Error checking image: {e}")
         return False
 
 def get_phash(image_bytes):
@@ -411,7 +411,7 @@ def str_to_phash(phash_str):
     try:
         return imagehash.hex_to_hash(phash_str)
     except ValueError as e:
-        print(f"Fehler beim Konvertieren des phash: {e}")
+        print(f"Error converting phash: {e}")
         return None
 
 def compare_hashes(phash):
@@ -424,21 +424,21 @@ def compare_hashes(phash):
     return False
 
 def get_current_category_page_url():
-    """Findet die aktuelle Kategorie-Seiten-URL basierend auf der letzten bearbeiteten Seite."""
+    """Finds the current category page URL based on the last processed page."""
     last_page = get_last_crawled_page()
     
     if not last_page:
-        # Wenn keine letzte Seite, starte mit der ersten Kategorie-Seite
+        # If no last page, start with the first category page
         return "https://en.wikipedia.org/wiki/Category:Living_people"
     
-    # Versuche die Kategorie-Seite zu finden, auf der sich die letzte Seite befindet
-    print(f"Suche Kategorie-Seite für letzte bearbeitete Seite: {last_page}")
+    # Try to find the category page where the last page is located
+    print(f"Searching category page for last processed page: {last_page}")
     
     category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
     pages_searched = 0
     
     while category_url:
-        # Unendliche Retry-Schleife bei Netzwerkfehlern
+        # Infinite retry loop for network errors
         while True:
             try:
                 headers = {
@@ -448,14 +448,14 @@ def get_current_category_page_url():
                 resp.raise_for_status()
                 soup = BeautifulSoup(resp.text, "html.parser")
                 
-                # Ethisches Crawling: Crawl-Delay respektieren
+                # Ethical crawling: respect crawl delay
                 time.sleep(CRAWL_DELAY)
-                break  # Erfolgreich geladen, verlasse Retry-Schleife
+                break  # Successfully loaded, exit retry loop
             except Exception as e:
-                print(f"⚠️ Netzwerkfehler beim Suchen der Kategorie-Seite {category_url}: {e}")
-                print("⏳ Warte 60 Sekunden und versuche es erneut...")
+                print(f"⚠️ Network error while searching category page {category_url}: {e}")
+                print("⏳ Waiting 60 seconds and retrying...")
                 time.sleep(60)
-                # Retry-Schleife läuft weiter
+                # Retry loop continues
         
         # Artikel auf dieser Seite sammeln
         content_div = soup.find("div", {"id": "mw-content-text"})
@@ -464,18 +464,18 @@ def get_current_category_page_url():
             for link in links:
                 article_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
                 if article_url == last_page:
-                    print(f"✓ Letzte Seite gefunden auf Kategorie-Seite: {category_url}")
+                    print(f"✓ Last page found on category page: {category_url}")
                     return category_url
         
-        # Zur nächsten Kategorie-Seite (robuste Suche)
+        # Go to next category page (robust search)
         next_page_link = None
         
-        # Methode 1: Suche nach "(next page)" Link
+        # Method 1: Search for "(next page)" link
         next_links = soup.find_all("a", string=lambda text: text and text.strip() == "(next page)")
         if next_links:
             next_page_link = next_links[0]
         
-        # Methode 2: Fallback - Suche nach Link mit "next" Text  
+        # Method 2: Fallback - Search for link with "next" text  
         if not next_page_link:
             all_links = soup.find_all("a", href=True)
             for link in all_links:
@@ -484,36 +484,36 @@ def get_current_category_page_url():
                     next_page_link = link
                     break
         
-        # Methode 3: Suche nach pagefrom Parameter in URLs
+        # Method 3: Search for pagefrom parameter in URLs
         if not next_page_link:
             pagefrom_links = soup.find_all("a", href=lambda x: x and "pagefrom=" in x)
             if pagefrom_links:
-                # Filtere Links die nach der aktuellen Seite kommen
+                # Filter links that come after the current page
                 for link in pagefrom_links:
                     if "(next page)" in str(link.parent) or "next" in link.get_text().lower():
                         next_page_link = link
                         break
-                # Falls kein expliziter "next" Text, nimm den ersten pagefrom Link
+                # If no explicit "next" text, take the first pagefrom link
                 if not next_page_link and pagefrom_links:
                     next_page_link = pagefrom_links[0]
         
         if next_page_link and next_page_link.get('href'):
             category_url = urllib.parse.urljoin("https://en.wikipedia.org", next_page_link['href'])
             pages_searched += 1
-            print(f"    Suche weiter auf nächster Kategorie-Seite ({pages_searched})")
+            print(f"    Continuing search on next category page ({pages_searched})")
         else:
-            print(f"    Keine weitere Kategorie-Seite gefunden nach {pages_searched} Seiten")
+            print(f"    No further category page found after {pages_searched} pages")
             break
     
-    print(f"Letzte Seite nicht gefunden nach {pages_searched} Kategorie-Seiten - mache von aktueller Position weiter")
-    return category_url  # Von der aktuellen Kategorie-Seite weitermachen
+    print(f"Last page not found after {pages_searched} category pages - continuing from current position")
+    return category_url  # Continue from current category page
 
 def get_articles_from_single_category_page(category_url):
-    """Sammelt alle Artikel von einer einzelnen Kategorie-Seite."""
-    # Unendliche Retry-Schleife - niemals aufgeben!
+    """Collects all articles from a single category page."""
+    # Infinite retry loop - never give up!
     while True:
         try:
-            print(f"Lade Artikel von Kategorie-Seite: {category_url}")
+            print(f"Loading articles from category page: {category_url}")
             headers = {
                 "User-Agent": USER_AGENT
             }
@@ -521,12 +521,12 @@ def get_articles_from_single_category_page(category_url):
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
             
-            # Ethisches Crawling: Crawl-Delay respektieren
+            # Ethical crawling: respect crawl delay
             time.sleep(CRAWL_DELAY)
             
             page_articles = []
             
-            # Links zu Personen-Artikeln sammeln
+            # Collect links to person articles
             content_div = soup.find("div", {"id": "mw-content-text"})
             if content_div:
                 links = content_div.find_all("a", href=lambda x: x and x.startswith("/wiki/") and ":" not in x.split("/wiki/")[1])
@@ -534,43 +534,43 @@ def get_articles_from_single_category_page(category_url):
                     article_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
                     page_articles.append(article_url)
             
-            # Nächste Kategorie-Seiten-URL finden (robuste Suche)
+            # Find next category page URL (robust search)
             next_category_url = None
             
-            # Methode 1: Suche nach "(next page)" Link
+            # Method 1: Search for "(next page)" link
             next_links = soup.find_all("a", string=lambda text: text and text.strip() == "(next page)")
             if next_links:
                 next_page_link = next_links[0]
                 if next_page_link.get('href'):
                     next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", next_page_link['href'])
-                    print(f"    Next-Page Link gefunden: {next_page_link.get('href')}")
+                    print(f"    Next-page link found: {next_page_link.get('href')}")
             
-            # Methode 2: Fallback - Suche nach Link mit "next" Text  
+            # Method 2: Fallback - Search for link with "next" text  
             if not next_category_url:
                 all_links = soup.find_all("a", href=True)
                 for link in all_links:
                     link_text = link.get_text().strip().lower()
                     if "next page" in link_text or link_text == "next":
                         next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
-                        print(f"    Fallback Next-Link gefunden: {link['href']}")
+                        print(f"    Fallback next-link found: {link['href']}")
                         break
             
-            # Methode 3: Suche nach pagefrom Parameter in URLs
+            # Method 3: Search for pagefrom parameter in URLs
             if not next_category_url:
                 pagefrom_links = soup.find_all("a", href=lambda x: x and "pagefrom=" in x)
                 if pagefrom_links:
-                    # Filtere Links die nach der aktuellen Seite kommen
+                    # Filter links that come after the current page
                     for link in pagefrom_links:
                         if "(next page)" in str(link.parent) or "next" in link.get_text().lower():
                             next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
-                            print(f"    Pagefrom Next-Link gefunden: {link['href']}")
+                            print(f"    Pagefrom next-link found: {link['href']}")
                             break
-                    # Falls kein expliziter "next" Text, nimm den ersten pagefrom Link
+                    # If no explicit "next" text, take the first pagefrom link
                     if not next_category_url and pagefrom_links:
                         next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", pagefrom_links[0]['href'])
-                        print(f"    Erster Pagefrom-Link gefunden: {pagefrom_links[0]['href']}")
+                        print(f"    First pagefrom-link found: {pagefrom_links[0]['href']}")
             
-            # Methode 4: Suche in Navigation-Elementen
+            # Method 4: Search in navigation elements
             if not next_category_url:
                 nav_elements = soup.find_all(['div', 'span'], class_=lambda x: x and ('mw-category-group' in x or 'pager' in x))
                 for nav in nav_elements:
@@ -578,23 +578,23 @@ def get_articles_from_single_category_page(category_url):
                     for link in links:
                         if "pagefrom=" in link.get('href', ''):
                             next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
-                            print(f"    Navigation Next-Link gefunden: {link['href']}")
+                            print(f"    Navigation next-link found: {link['href']}")
                             break
                     if next_category_url:
                         break
             
             if next_category_url:
-                print(f"✓ {len(page_articles)} Artikel von dieser Kategorie-Seite geladen, nächste Seite verfügbar")
+                print(f"✓ {len(page_articles)} articles loaded from this category page, next page available")
             else:
-                print(f"✓ {len(page_articles)} Artikel von dieser Kategorie-Seite geladen, keine weitere Seite gefunden")
+                print(f"✓ {len(page_articles)} articles loaded from this category page, no further page found")
             
             return page_articles, next_category_url
             
         except Exception as e:
-            print(f"⚠️ Netzwerkfehler beim Laden der Kategorie-Seite {category_url}: {e}")
-            print("⏳ Warte 60 Sekunden und versuche es erneut...")
+            print(f"⚠️ Network error while loading category page {category_url}: {e}")
+            print("⏳ Waiting 60 seconds and retrying...")
             time.sleep(60)
-            # Schleife läuft weiter - niemals aufgeben!
+            # Loop continues - never give up!
 
 def is_page_already_crawled(page_url):
     """Da wir keine Datei lesen - immer False (keine Duplikate erkennen)."""
@@ -605,31 +605,31 @@ def crawl_images():
     processed_count = 0
     entries_saved = 0
     
-    # Prüfen ob wir einen Resume-Punkt haben
+    # Check if we have a resume point
     last_page = get_last_crawled_page()
     if last_page:
-        print("Resume: Suche Startpunkt basierend auf letztem Artikel...")
+        print("Resume: Searching start point based on last article...")
     else:
-        print("Starte neuen Crawling-Durchlauf (append-only)...")
+        print("Starting new crawling session (append-only)...")
     
-    # Aktuelle Kategorie-Seiten-URL bestimmen
+    # Determine current category page URL
     current_category_url = get_current_category_page_url()
     
     while current_category_url:
-        print(f"\n--- Bearbeite Kategorie-Seite: {current_category_url} ---")
+        print(f"\n--- Processing category page: {current_category_url} ---")
         
-        # Artikel von der aktuellen Kategorie-Seite laden
+        # Load articles from current category page
         page_articles, next_category_url = get_articles_from_single_category_page(current_category_url)
         
         if not page_articles:
-            print("Keine Artikel auf dieser Seite gefunden - gehe zur nächsten")
+            print("No articles found on this page - going to next")
             current_category_url = next_category_url
             continue
         
-        # Queue mit Artikeln von dieser Kategorie-Seite füllen
+        # Fill queue with articles from this category page
         queue = deque(page_articles)
         
-        # Wenn wir einen Resume-Punkt haben, überspringe alle Artikel bis zum letzten + 1
+        # If we have a resume point, skip all articles up to last + 1
         if last_page:
             articles_to_skip = []
             found_last_page = False
@@ -637,35 +637,35 @@ def crawl_images():
             for article in page_articles:
                 if article == last_page:
                     found_last_page = True
-                    print(f"🎯 Letzten Artikel gefunden: {article} - überspringe bis hierhin")
+                    print(f"🎯 Last article found: {article} - skipping up to here")
                     break
                 else:
                     articles_to_skip.append(article)
             
             if found_last_page:
-                # Überspringe alle Artikel bis zum letzten (inklusive)
-                for _ in range(len(articles_to_skip) + 1):  # +1 um den letzten Artikel selbst zu überspringen
+                # Skip all articles up to the last one (inclusive)
+                for _ in range(len(articles_to_skip) + 1):  # +1 to skip the last article itself
                     if queue:
                         queue.popleft()
-                print(f"⏭️ {len(articles_to_skip) + 1} bereits bearbeitete Artikel übersprungen")
-                # Reset last_page nach erfolgreichem Resume
+                print(f"⏭️ {len(articles_to_skip) + 1} already processed articles skipped")
+                # Reset last_page after successful resume
                 last_page = None
         
         remaining_articles = len(queue)
-        print(f"Bearbeite {remaining_articles} verbleibende Artikel dieser Kategorie-Seite")
+        print(f"Processing {remaining_articles} remaining articles from this category page")
         
-        # Artikel von der aktuellen Kategorie-Seite bearbeiten
+        # Process articles from current category page
         while queue:
             url = queue.popleft()
                 
             processed_count += 1
-            print(f"Crawle Seite: {url} (#{processed_count})")
+            print(f"Crawling page: {url} (#{processed_count})")
 
-            # Aktuelle Artikel-Daten für diesen Artikel leeren
+            # Clear current article data for this article
             current_article_data.clear()
 
             try:
-                # Unendliche Retry-Schleife bei Netzwerkfehlern
+                # Infinite retry loop for network errors
                 while True:
                     try:
                         headers = {
@@ -674,16 +674,16 @@ def crawl_images():
                         resp = requests.get(url, timeout=60, headers=headers)
                         resp.raise_for_status()
                         
-                        # Ethisches Crawling: Crawl-Delay respektieren
+                        # Ethical crawling: respect crawl delay
                         time.sleep(CRAWL_DELAY)
-                        break  # Erfolgreich geladen, verlasse Retry-Schleife
+                        break  # Successfully loaded, exit retry loop
                     except Exception as e:
-                        print(f"⚠️ Netzwerkfehler beim Laden der Seite {url}: {e}")
-                        print("⏳ Warte 30 Sekunden und versuche es erneut...")
+                        print(f"⚠️ Network error while loading page {url}: {e}")
+                        print("⏳ Waiting 30 seconds and retrying...")
                         time.sleep(30)
-                        # Retry-Schleife läuft weiter - niemals aufgeben!
+                        # Retry loop continues - never give up!
             except Exception as e:
-                print(f"Unerwarteter Fehler beim Laden der Seite {url}: {e}")
+                print(f"Unexpected error while loading page {url}: {e}")
                 continue
 
             soup = BeautifulSoup(resp.text, "html.parser")
@@ -703,63 +703,63 @@ def crawl_images():
                 try:
                     image = face_recognition.load_image_file(BytesIO(image_bytes))
                     
-                    if bild_bytes_enthält_gesicht(image):
+                    if image_bytes_contains_face(image):
                         if not compare_hashes(get_phash(image_bytes)):
                             process_image(image, image_bytes, img_url, url)
                         else:
-                            print(f"Bild bereits im aktuellen Artikel vorhanden: {img_url}")
+                            print(f"Image already present in current article: {img_url}")
                     else:
-                        print(f"Kein Gesicht gefunden: {img_url}")
+                        print(f"No face found: {img_url}")
                         
-                    # Explizit Speicher freigeben
+                    # Explicitly free memory
                     del image, image_bytes
                     
                 except Exception as e:
-                    print(f"Fehler beim Laden des Bildes {img_url}: {e}")
+                    print(f"Error loading image {img_url}: {e}")
                     continue
             
-            # Ergebnisse für diesen Artikel speichern (nur wenn Daten vorhanden)
+            # Save results for this article (only if data exists)
             if current_article_data:
                 entries_saved += len(current_article_data)
                 save_database()
                 
-            # Letzten gecrawlten Artikel speichern (für Resume-Funktion)
+            # Save last crawled article (for resume function)
             save_last_crawled_page(url)
 
-            # Regelmäßige Garbage Collection alle 10 Artikel um Memory Leaks zu vermeiden
+            # Regular garbage collection every 10 articles to avoid memory leaks
             if processed_count % 10 == 0:
                 gc.collect()
-                print(f"🧹 Garbage Collection durchgeführt nach {processed_count} Artikeln")
+                print(f"🧹 Garbage collection performed after {processed_count} articles")
         
-        # Zur nächsten Kategorie-Seite
-        print(f"✓ Kategorie-Seite abgeschlossen. Verarbeitete Artikel: {processed_count}")
+        # Go to next category page
+        print(f"✓ Category page completed. Processed articles: {processed_count}")
             
         current_category_url = next_category_url
         if not current_category_url:
-            print("⚠️ Keine weiteren Kategorie-Seiten gefunden - starte vom Anfang...")
-            # Statt zu stoppen, fange von vorne an
+            print("⚠️ No more category pages found - starting from beginning...")
+            # Instead of stopping, start from the beginning
             current_category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
-            time.sleep(300)  # 5 Minuten warten bevor Neustart
+            time.sleep(300)  # Wait 5 minutes before restart
 
-    print(f"Crawling abgeschlossen. {entries_saved} neue Einträge zur Datenbank hinzugefügt.")
+    print(f"Crawling completed. {entries_saved} new entries added to database.")
 
 if __name__ == "__main__":
-    print("Starte Living People Crawler (append-only)...")
+    print("Starting Living People Crawler (append-only)...")
     try:
-        crawl_images()  # max_pages anpassen
+        crawl_images()  # adjust max_pages
     except KeyboardInterrupt:
-        # Falls der Signal-Handler nicht ausgelöst wird
-        print("\nUnterbrechung erkannt! Speichere Datenbank...")
+        # In case the signal handler is not triggered
+        print("\nInterrupt detected! Saving database...")
         save_database()
         close_database()
-        print("Crawler beendet.")
+        print("Crawler terminated.")
     except Exception as e:
-        print(f"Unerwarteter Fehler: {e}")
+        print(f"Unexpected error: {e}")
         save_database()
         close_database()
-        print("Datenbank wurde trotz Fehler gespeichert.")
+        print("Database was saved despite error.")
     finally:
-        # Sicherstellen, dass die Datenbank auf jeden Fall gespeichert und geschlossen wird
+        # Ensure database is saved and closed in any case
         save_database()
         close_database()
     

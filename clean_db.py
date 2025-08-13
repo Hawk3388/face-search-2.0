@@ -5,56 +5,56 @@ import shutil
 import os
 
 def load_database(path="face_embeddings.json"):
-    """Lädt die Gesichts-Datenbank"""
+    """Loads the face database"""
     try:
         with open(path, "r") as f:
             return json.load(f)
     except FileNotFoundError:
-        print(f"Datei {path} nicht gefunden!")
+        print(f"File {path} not found!")
         return []
     except json.JSONDecodeError:
-        print(f"Fehler beim Laden der JSON-Datei {path}")
+        print(f"Error loading JSON file {path}")
         return []
 
 def str_to_phash(phash_str):
-    """Konvertiert String zu phash-Objekt"""
+    """Converts string to phash object"""
     try:
         return imagehash.hex_to_hash(phash_str)
     except (ValueError, TypeError) as e:
-        print(f"Fehler beim Konvertieren des phash '{phash_str}': {e}")
+        print(f"Error converting phash '{phash_str}': {e}")
         return None
 
 def create_backup(original_file):
-    """Erstellt ein Backup der ursprünglichen Datei"""
+    """Creates a backup of the original file"""
     backup_file = "face_embeddings_backup.json"
     try:
         shutil.copy2(original_file, backup_file)
-        print(f"✅ Backup erstellt: {backup_file}")
+        print(f"✅ Backup created: {backup_file}")
         return backup_file
     except Exception as e:
-        print(f"❌ Fehler beim Erstellen des Backups: {e}")
+        print(f"❌ Error creating backup: {e}")
         return None
 
 def find_hash_duplicates(database, hash_threshold=5):
     """
-    Findet Duplikate basierend auf phash-Vergleich (ultra-optimierte Version mit LSH)
+    Finds duplicates based on phash comparison (ultra-optimized version with LSH)
     
     Args:
-        database: Liste der Datenbankeinträge
-        hash_threshold: Maximale Hamming-Distanz für phash-Vergleich (Standard: 5)
+        database: List of database entries
+        hash_threshold: Maximum Hamming distance for phash comparison (default: 5)
     
     Returns:
-        Liste von Duplikat-Gruppen, wobei jede Gruppe eine Liste ähnlicher Einträge ist
+        List of duplicate groups, where each group is a list of similar entries
     """
-    print(f"🔍 Suche nach Duplikaten mit Hash-Schwellenwert: {hash_threshold}")
+    print(f"🔍 Searching for duplicates with hash threshold: {hash_threshold}")
     
-    # Alle gültigen Hashes mit ihren Indizes sammeln
-    print("📋 Lade und validiere Hashes...")
+    # Collect all valid hashes with their indices
+    print("📋 Loading and validating hashes...")
     valid_entries = []
     for i, entry in enumerate(database):
         phash = str_to_phash(entry.get("phash", ""))
         if phash is not None:
-            # Konvertiere Hash zu Integer für schnellere Vergleiche
+            # Convert hash to integer for faster comparisons
             hash_int = int(str(phash), 16)
             valid_entries.append({
                 "index": i,
@@ -63,39 +63,39 @@ def find_hash_duplicates(database, hash_threshold=5):
                 "hash_int": hash_int
             })
     
-    print(f"✅ {len(valid_entries)} von {len(database)} Einträgen haben gültige Hashes")
+    print(f"✅ {len(valid_entries)} of {len(database)} entries have valid hashes")
     
     if len(valid_entries) < 2:
-        print("❌ Nicht genug gültige Hashes für Vergleich")
+        print("❌ Not enough valid hashes for comparison")
         return []
     
-    print("🚀 Verwende Bucket-basierte Optimierung...")
+    print("🚀 Using bucket-based optimization...")
     
-    # Bucket-basierte Vorsortierung für massive Speedup
-    # Gruppiere Hashes nach ihren ersten 16 Bits (65536 Buckets)
+    # Bucket-based pre-sorting for massive speedup
+    # Group hashes by their first 16 bits (65536 buckets)
     buckets = defaultdict(list)
     for entry in valid_entries:
-        bucket_key = entry["hash_int"] >> 48  # Erste 16 Bits
+        bucket_key = entry["hash_int"] >> 48  # First 16 bits
         buckets[bucket_key].append(entry)
     
     duplicate_groups = []
     processed_global = set()
     total_comparisons = 0
     
-    print("🔄 Verarbeite Buckets...")
+    print("🔄 Processing buckets...")
     bucket_count = 0
     for bucket_key, bucket_entries in buckets.items():
         bucket_count += 1
         if bucket_count % 1000 == 0:
-            print(f"Bucket-Fortschritt: {bucket_count}/{len(buckets)}")
+            print(f"Bucket progress: {bucket_count}/{len(buckets)}")
         
         if len(bucket_entries) < 2:
             continue
         
-        # Nur innerhalb des Buckets vergleichen + angrenzende Buckets für Grenzfälle
+        # Only compare within bucket + adjacent buckets for edge cases
         candidates = bucket_entries.copy()
         
-        # Füge ähnliche Buckets hinzu (für Hashes nahe der Bucket-Grenze)
+        # Add similar buckets (for hashes near bucket boundary)
         for offset in [-1, 1]:
             neighbor_key = bucket_key + offset
             if neighbor_key in buckets:

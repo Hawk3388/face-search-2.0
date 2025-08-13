@@ -3,36 +3,36 @@ import random
 from clean_db import find_hash_duplicates
 
 def generate_test_data(count=40000):
-    """Generiert Testdaten mit echten phash-Werten"""
-    print(f"📝 Generiere {count} Test-Einträge...")
+    """Generates test data with real phash values"""
+    print(f"📝 Generating {count} test entries...")
     
     test_data = []
     
-    # Generiere verschiedene Basis-Hashes
+    # Generate various base hashes
     base_hashes = []
-    for i in range(min(1000, count // 40)):  # Etwa 40 ähnliche Bilder pro Basis-Hash
-        # Erstelle einen zufälligen 64-bit Hash
+    for i in range(min(1000, count // 40)):  # About 40 similar images per base hash
+        # Create a random 64-bit hash
         random_hash = ''.join(random.choices('0123456789abcdef', k=16))
         base_hashes.append(random_hash)
     
     for i in range(count):
         if i % 5000 == 0:
-            print(f"Fortschritt: {i}/{count}")
+            print(f"Progress: {i}/{count}")
         
-        # Wähle einen Basis-Hash
+        # Choose a base hash
         base_hash = random.choice(base_hashes)
         
-        # Erstelle leichte Variationen (für Duplikate) oder komplett neue Hashes
-        if random.random() < 0.1:  # 10% Chance auf Duplikat
-            # Leichte Variation des Basis-Hash (1-3 Bit Unterschied)
+        # Create slight variations (for duplicates) or completely new hashes
+        if random.random() < 0.1:  # 10% chance of duplicate
+            # Slight variation of base hash (1-3 bit difference)
             hash_int = int(base_hash, 16)
-            # Flippe 1-3 zufällige Bits
+            # Flip 1-3 random bits
             for _ in range(random.randint(1, 3)):
                 bit_pos = random.randint(0, 63)
                 hash_int ^= (1 << bit_pos)
             varied_hash = f"{hash_int:016x}"
         else:
-            # Komplett neuer Hash
+            # Completely new hash
             varied_hash = ''.join(random.choices('0123456789abcdef', k=16))
         
         entry = {
@@ -43,11 +43,11 @@ def generate_test_data(count=40000):
         }
         test_data.append(entry)
     
-    print(f"✅ {count} Test-Einträge generiert")
+    print(f"✅ {count} test entries generated")
     return test_data
 
 def benchmark_performance():
-    """Führt Performance-Tests durch"""
+    """Performs performance tests"""
     sizes = [1000, 5000, 10000, 20000, 40000]
     
     for size in sizes:
@@ -55,39 +55,39 @@ def benchmark_performance():
             break
             
         print(f"\n{'='*50}")
-        print(f"🚀 BENCHMARK MIT {size} EINTRÄGEN")
+        print(f"🚀 BENCHMARK WITH {size} ENTRIES")
         print(f"{'='*50}")
         
-        # Generiere Testdaten
+        # Generate test data
         test_data = generate_test_data(size)
         
-        # Zeitmessung
+        # Time measurement
         start_time = time.time()
         
-        # Führe Duplikat-Suche durch
+        # Perform duplicate search
         duplicates = find_hash_duplicates(test_data, hash_threshold=5)
         
         end_time = time.time()
         duration = end_time - start_time
         
-        print(f"⏱️  Zeit: {duration:.2f} Sekunden")
-        print(f"📊 Gefundene Duplikat-Gruppen: {len(duplicates)}")
-        print(f"🔄 Vergleiche pro Sekunde: {(size * (size-1) / 2) / duration:.0f}")
+        print(f"⏱️  Time: {duration:.2f} seconds")
+        print(f"📊 Found duplicate groups: {len(duplicates)}")
+        print(f"🔄 Comparisons per second: {(size * (size-1) / 2) / duration:.0f}")
         
-        # Hochrechnung für 40k falls noch nicht erreicht
+        # Projection for 40k if not yet reached
         if size < 40000:
-            # O(n²) Komplexität
+            # O(n²) complexity
             estimated_40k = duration * (40000 / size) ** 2
-            print(f"📈 Geschätzte Zeit für 40.000: {estimated_40k:.1f} Sekunden ({estimated_40k/60:.1f} Minuten)")
+            print(f"📈 Estimated time for 40,000: {estimated_40k:.1f} seconds ({estimated_40k/60:.1f} minutes)")
 
 def quick_40k_estimate():
-    """Schnelle Schätzung nur für 40k"""
-    print("🔍 SCHNELLE 40K SCHÄTZUNG")
+    """Quick estimation for 40k only"""
+    print("🔍 QUICK 40K ESTIMATION")
     print("="*30)
     
-    # Teste mit kleinerer Menge für Hochrechnung
+    # Test with smaller amount for projection
     test_size = 2000
-    print(f"Teste mit {test_size} Einträgen für Hochrechnung...")
+    print(f"Testing with {test_size} entries for projection...")
     
     test_data = generate_test_data(test_size)
     
@@ -96,21 +96,21 @@ def quick_40k_estimate():
     end_time = time.time()
     
     duration = end_time - start_time
-    print(f"⏱️  Zeit für {test_size}: {duration:.2f} Sekunden")
+    print(f"⏱️  Time for {test_size}: {duration:.2f} seconds")
     
-    # Hochrechnung auf 40k (O(n²))
+    # Projection to 40k (O(n²))
     factor = (40000 / test_size) ** 2
     estimated_40k = duration * factor
     
-    print(f"📈 Geschätzte Zeit für 40.000 Einträge:")
-    print(f"   🕐 {estimated_40k:.1f} Sekunden")
-    print(f"   🕐 {estimated_40k/60:.1f} Minuten")
-    print(f"   🕐 {estimated_40k/3600:.1f} Stunden")
+    print(f"📈 Estimated time for 40,000 entries:")
+    print(f"   🕐 {estimated_40k:.1f} seconds")
+    print(f"   🕐 {estimated_40k/60:.1f} minutes")
+    print(f"   🕐 {estimated_40k/3600:.1f} hours")
 
 if __name__ == "__main__":
-    choice = input("Vollständiger Benchmark (v) oder schnelle 40k Schätzung (s)? [s]: ").lower()
+    choice = input("Full benchmark (f) or quick 40k estimation (q)? [q]: ").lower()
     
-    if choice == 'v':
+    if choice == 'f':
         benchmark_performance()
     else:
         quick_40k_estimate()
