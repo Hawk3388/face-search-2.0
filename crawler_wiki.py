@@ -80,7 +80,10 @@ def save_database():
             for i, entry in enumerate(current_article_data):
                 if not is_first_entry or i > 0:
                     f.write(",\n")
-                f.write("  " + json.dumps(entry, indent=2).replace('\n', '\n  '))
+                # Remove null bytes before writing
+                entry_str = "  " + json.dumps(entry, indent=2).replace('\n', '\n  ')
+                entry_str = entry_str.replace('\x00', '')
+                f.write(entry_str)
                 is_first_entry = False
         
         # Update counter and check periodic backup
