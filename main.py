@@ -5,6 +5,8 @@ from PIL import Image
 import numpy as np
 from io import BytesIO
 import requests
+import os
+import gdown
 
 # Load embedding database
 def load_database(path="face_embeddings.json"):
@@ -26,7 +28,13 @@ def main():
     # App
     st.set_page_config(page_title="Face Search", layout="centered")
     st.title("🔍 Face Search")
-    
+
+    path = "face_embeddings.json"
+
+    if not os.path.exists(path):
+        file_id = st.secrets["gdrive"]["file_id"]
+        gdown.download(file_id, path, quiet=False)
+
     db = load_database()
 
     uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"])
