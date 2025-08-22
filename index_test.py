@@ -2,13 +2,13 @@ import requests
 
 API_URL = "https://en.wikipedia.org/w/api.php"
 CATEGORY = "Living people"
-TARGET_INDEX = 5468  # z.B. den 5468. Eintrag
+TARGET_INDEX = 105468  # z.B. den 5468. Eintrag
 
 params = {
     "action": "query",
     "list": "categorymembers",
     "cmtitle": f"Category:{CATEGORY}",
-    "cmlimit": "500",   # max 500 pro Request
+    "cmlimit": "1000",   # max 500 pro Request
     "format": "json"
 }
 
