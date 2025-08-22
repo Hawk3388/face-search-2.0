@@ -3,11 +3,11 @@ import os
 cuda_path = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1"
 cudnn_path = r"C:\Program Files\NVIDIA\CUDNN\v9.6\bin\12.6"
 
-# Add CUDA libraries to PATH
-if os.path.exists(cuda_path):
-    os.environ['PATH'] = cuda_path + r'\bin;' + os.environ.get('PATH', '')
+cuda = True if os.path.exists(cuda_path) and os.path.exists(cudnn_path) else False
 
-if os.path.exists(cudnn_path):
+# Add CUDA libraries to PATH
+if cuda:
+    os.environ['PATH'] = cuda_path + r'\bin;' + os.environ.get('PATH', '')
     os.environ['PATH'] = cudnn_path + ';' + os.environ.get('PATH', '')
 
 import requests
@@ -26,6 +26,7 @@ import gc  # For garbage collection
 import time  # For error waiting times
 import urllib.robotparser  # For robots.txt respect
 import concurrent.futures
+import re
 
 # Ethical scraping - respect Wikipedia's guidelines
 CRAWL_DELAY = 1.0  # 1 second between requests (more than recommended 100ms)
@@ -151,8 +152,8 @@ def get_visited_pages_from_db():
 def get_last_crawled_page():
     """Reads the last crawled article from a small separate file."""
     try:
-        if os.path.exists("last_crawled_page.txt"):
-            with open("last_crawled_page.txt", "r", encoding="utf-8") as f:
+        if os.path.exists("last_crawled_page.json"):
+            with open("last_crawled_page.json", "r", encoding="utf-8") as f:
                 last_page = f.read().strip()
                 if last_page:
                     print(f"📄 Last crawled article: {last_page}")
@@ -161,10 +162,31 @@ def get_last_crawled_page():
         print(f"Error reading last page: {e}")
     return None
 
+def get_last_crawled_pages():
+    """Reads the last crawled articles from a small separate file."""
+    try:
+        if os.path.exists("last_crawled_page.json"):
+            with open("last_crawled_page.json", "r", encoding="utf-8") as f:
+                last_pages = f.read()
+                if last_pages:
+                    print(f"📄 Last crawled articles: {last_pages}")
+                    return last_pages
+    except Exception as e:
+        print(f"Error reading last pages: {e}")
+    return None
+
+def save_last_crawled_pages(page_urls):
+    """Saves the current article URLs to a small separate file."""
+    try:
+        with open("last_crawled_page.json", "w", encoding="utf-8") as f:
+            json.dump(page_urls, f)
+    except Exception as e:
+        print(f"Error saving last page: {e}")
+
 def save_last_crawled_page(page_url):
     """Saves the current article URL to a small separate file."""
     try:
-        with open("last_crawled_page.txt", "w", encoding="utf-8") as f:
+        with open("last_crawled_page.json", "w", encoding="utf-8") as f:
             f.write(page_url)
     except Exception as e:
         print(f"Error saving last page: {e}")
@@ -427,10 +449,8 @@ def compare_hashes(phash):
             return True
     return False
 
-def get_current_category_page_url():
+def get_current_category_page_url(last_page):
     """Finds the current category page URL based on the last processed page."""
-    last_page = get_last_crawled_page()
-    
     if not last_page:
         # If no last page, start with the first category page
         return "https://en.wikipedia.org/wiki/Category:Living_people"
@@ -468,6 +488,89 @@ def get_current_category_page_url():
             for link in links:
                 article_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
                 if article_url == last_page:
+                    print(f"✓ Last page found on category page: {category_url}")
+                    return category_url
+        
+        # Go to next category page (robust search)
+        next_page_link = None
+        
+        # Method 1: Search for "(next page)" link
+        next_links = soup.find_all("a", string=lambda text: text and text.strip() == "(next page)")
+        if next_links:
+            next_page_link = next_links[0]
+        
+        # Method 2: Fallback - Search for link with "next" text  
+        if not next_page_link:
+            all_links = soup.find_all("a", href=True)
+            for link in all_links:
+                link_text = link.get_text().strip().lower()
+                if "next page" in link_text or link_text == "next":
+                    next_page_link = link
+                    break
+        
+        # Method 3: Search for pagefrom parameter in URLs
+        if not next_page_link:
+            pagefrom_links = soup.find_all("a", href=lambda x: x and "pagefrom=" in x)
+            if pagefrom_links:
+                # Filter links that come after the current page
+                for link in pagefrom_links:
+                    if "(next page)" in str(link.parent) or "next" in link.get_text().lower():
+                        next_page_link = link
+                        break
+                # If no explicit "next" text, take the first pagefrom link
+                if not next_page_link and pagefrom_links:
+                    next_page_link = pagefrom_links[0]
+        
+        if next_page_link and next_page_link.get('href'):
+            category_url = urllib.parse.urljoin("https://en.wikipedia.org", next_page_link['href'])
+            pages_searched += 1
+            print(f"    Continuing search on next category page ({pages_searched})")
+        else:
+            print(f"    No further category page found after {pages_searched} pages")
+            break
+    
+    print(f"Last page not found after {pages_searched} category pages - continuing from current position")
+    return category_url  # Continue from current category page
+
+def get_current_category_pages_url(last_pages):
+    """Finds the current category page URL based on the last processed page."""
+    if not last_pages:
+        # If no last page, start with the first category page
+        return "https://en.wikipedia.org/wiki/Category:Living_people"
+    
+    # Try to find the category page where the last page is located
+    print(f"Searching category page for last processed pages: {last_pages}")
+
+    category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
+    pages_searched = 0
+    
+    while category_url:
+        # Infinite retry loop for network errors
+        while True:
+            try:
+                headers = {
+                    "User-Agent": USER_AGENT
+                }
+                resp = requests.get(category_url, timeout=60, headers=headers)
+                resp.raise_for_status()
+                soup = BeautifulSoup(resp.text, "html.parser")
+                
+                # Ethical crawling: respect crawl delay
+                time.sleep(CRAWL_DELAY)
+                break  # Successfully loaded, exit retry loop
+            except Exception as e:
+                print(f"⚠️ Network error while searching category page {category_url}: {e}")
+                print("⏳ Waiting 60 seconds and retrying...")
+                time.sleep(60)
+                # Retry loop continues
+        
+        # Artikel auf dieser Seite sammeln
+        content_div = soup.find("div", {"id": "mw-content-text"})
+        if content_div:
+            links = content_div.find_all("a", href=lambda x: x and x.startswith("/wiki/") and ":" not in x.split("/wiki/")[1])
+            for link in links:
+                article_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
+                if article_url in last_pages:
                     print(f"✓ Last page found on category page: {category_url}")
                     return category_url
         
@@ -604,6 +707,157 @@ def is_page_already_crawled(page_url):
     """Da wir keine Datei lesen - immer False (keine Duplikate erkennen)."""
     return False
 
+def get_article_count(category_url="https://en.wikipedia.org/wiki/Category:Living_people"):
+    try:
+        headers = {"User-Agent": USER_AGENT}
+        resp = requests.get(category_url, timeout=30, headers=headers)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        # Suche nach dem Satz mit der Gesamtanzahl
+        for p in soup.find_all("p"):
+            text = p.get_text()
+            match = re.search(r"out of approximately ([\d,]+) total", text)
+            if match:
+                count_str = match.group(1).replace(",", "")
+                return int(count_str)
+        # Fallback: Suche im gesamten Text
+        text = soup.get_text()
+        match = re.search(r"out of approximately ([\d,]+) total", text)
+        if match:
+            count_str = match.group(1).replace(",", "")
+            return int(count_str)
+        print("⚠️ Keine Artikelanzahl gefunden.")
+        return None
+    except Exception as e:
+        print(f"Fehler beim Auslesen der Artikelanzahl: {e}")
+        return None
+
+def crawl_images_thread(num_threads=8):
+    global queue, current_article_data
+    processed_count = 0
+    entries_saved = 0
+
+    article_count = get_article_count()
+
+    if not article_count:
+        print("⚠️ Artikelanzahl konnte nicht ermittelt werden.")
+        return
+
+    article_per_thread = int(article_count / num_threads)
+
+    # Check if we have a resume point
+    last_pages = get_last_crawled_pages()
+    if last_pages:
+        print("Resume: Searching start point based on last article...")
+    else:
+        start_threads = [article_per_thread * i for i in range(num_threads)]
+        print("Starting new crawling session (append-only)...")
+    
+    # Determine current category page URL
+    current_category_url = get_current_category_pages_url(last_pages)
+    
+    while current_category_url:
+        print(f"\n--- Processing category page: {current_category_url} ---")
+        
+        # Load articles from current category page
+        page_articles, next_category_url = get_articles_from_single_category_page(current_category_url)
+        
+        if not page_articles:
+            print("No articles found on this page - going to next")
+            current_category_url = next_category_url
+            continue
+        
+        # Fill queue with articles from this category page
+        queue = deque(page_articles)
+        
+        # If we have a resume point, skip all articles up to last + 1
+        if last_page:
+            articles_to_skip = []
+            found_last_page = False
+            
+            for article in page_articles:
+                if article == last_page:
+                    found_last_page = True
+                    print(f"🎯 Last article found: {article} - skipping up to here")
+                    break
+                else:
+                    articles_to_skip.append(article)
+            
+            if found_last_page:
+                # Skip all articles up to the last one (inclusive)
+                for _ in range(len(articles_to_skip) + 1):  # +1 to skip the last article itself
+                    if queue:
+                        queue.popleft()
+                print(f"⏭️ {len(articles_to_skip) + 1} already processed articles skipped")
+                # Reset last_page after successful resume
+                last_page = None
+        
+        remaining_articles = len(queue)
+        print(f"Processing {remaining_articles} remaining articles from this category page")
+        
+        # Process articles from current category page
+        while queue:
+            url = queue.popleft()
+                
+            processed_count += 1
+            print(f"Crawling page: {url} (#{processed_count})")
+
+            # Clear current article data for this article
+            current_article_data.clear()
+
+            try:
+                # Infinite retry loop for network errors
+                while True:
+                    try:
+                        headers = {
+                            "User-Agent": USER_AGENT
+                        }
+                        resp = requests.get(url, timeout=60, headers=headers)
+                        resp.raise_for_status()
+                        
+                        # Ethical crawling: respect crawl delay
+                        time.sleep(CRAWL_DELAY)
+                        break  # Successfully loaded, exit retry loop
+                    except Exception as e:
+                        print(f"⚠️ Network error while loading page {url}: {e}")
+                        print("⏳ Waiting 30 seconds and retrying...")
+                        time.sleep(30)
+                        # Retry loop continues - never give up!
+            except Exception as e:
+                print(f"Unexpected error while loading page {url}: {e}")
+                continue
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # Bilder finden und herunterladen
+            images = soup.find_all("img")
+            process_images_in_article(images, url)
+            
+            # Save results for this article (only if data exists)
+            if current_article_data:
+                entries_saved += len(current_article_data)
+                save_database()
+                
+            # Save last crawled article (for resume function)
+            save_last_crawled_page(url)
+
+            # Regular garbage collection every 10 articles to avoid memory leaks
+            if processed_count % 10 == 0:
+                gc.collect()
+                print(f"🧹 Garbage collection performed after {processed_count} articles")
+        
+        # Go to next category page
+        print(f"✓ Category page completed. Processed articles: {processed_count}")
+            
+        current_category_url = next_category_url
+        if not current_category_url:
+            print("⚠️ No more category pages found - starting from beginning...")
+            # Instead of stopping, start from the beginning
+            current_category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
+            time.sleep(300)  # Wait 5 minutes before restart
+
+    print(f"Crawling completed. {entries_saved} new entries added to database.")
+
 def crawl_images():
     global queue, current_article_data
     processed_count = 0
@@ -617,7 +871,7 @@ def crawl_images():
         print("Starting new crawling session (append-only)...")
     
     # Determine current category page URL
-    current_category_url = get_current_category_page_url()
+    current_category_url = get_current_category_page_url(last_page)
     
     while current_category_url:
         print(f"\n--- Processing category page: {current_category_url} ---")
