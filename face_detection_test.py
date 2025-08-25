@@ -1,8 +1,14 @@
 import cv2
 import time
+import face_recognition
 
 # Haar-Cascade laden
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+
+def has_face_recognition(image_path):
+    img = face_recognition.load_image_file(image_path)
+    face_locations = face_recognition.face_locations(img)
+    return len(face_locations) > 0
 
 def has_face(image_path):
     img = cv2.imread(image_path)
