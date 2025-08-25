@@ -22,7 +22,6 @@ jsonschema-specifications==2025.4.1
 MarkupSafe==3.0.2
 narwhals==2.0.1
 numpy==2.2.6
-opencv-python==4.12.0.88
 packaging==25.0
 pandas==2.3.1
 pillow==11.3.0
@@ -37,6 +36,7 @@ referencing==0.36.2
 requests==2.32.4
 rpds-py==0.26.0
 scipy==1.15.3
+setuptools==80.9.0
 six==1.17.0
 smmap==5.0.2
 soupsieve==2.7
@@ -50,3 +50,4 @@ tzdata==2025.2
 urllib3==2.5.0
 warcio==1.7.5
 watchdog==6.0.0
+wheel==0.45.1
