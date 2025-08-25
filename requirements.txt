@@ -8,8 +8,9 @@ charset-normalizer==3.4.2
 click==8.2.1
 colorama==0.4.6
 dlib-bin==19.24.6
-face_recognition @ git+https://github.com/thetoby9944/face_recognition.git
+face_recognition @ git+https://github.com/thetoby9944/face_recognition.git@d632e2e8d5b5b286d944c333f3ff4433dafabb19
 face_recognition_models==0.3.0
+filelock==3.19.1
 gdown==5.2.0
 gitdb==4.0.12
 GitPython==3.1.45
@@ -21,12 +22,14 @@ jsonschema-specifications==2025.4.1
 MarkupSafe==3.0.2
 narwhals==2.0.1
 numpy==2.2.6
+opencv-python==4.12.0.88
 packaging==25.0
 pandas==2.3.1
 pillow==11.3.0
 protobuf==6.31.1
 pyarrow==21.0.0
 pydeck==0.9.1
+PySocks==1.7.1
 python-dateutil==2.9.0.post0
 pytz==2025.2
 PyWavelets==1.8.0
@@ -41,6 +44,7 @@ streamlit==1.47.1
 tenacity==9.1.2
 toml==0.10.2
 tornado==6.5.1
+tqdm==4.67.1
 typing_extensions==4.14.1
 tzdata==2025.2
 urllib3==2.5.0
