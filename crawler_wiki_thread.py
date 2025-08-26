@@ -37,6 +37,61 @@ USER_AGENT = "FaceSearchBot/1.0 (Educational Research; Contact: github.com/Hawk3
 consecutive_429_errors = 0
 MAX_CONSECUTIVE_429 = 10  # Stop after 10 consecutive 429 errors
 
+model = None
+
+if os.path.exists("tinyfacenet_best.pth"):
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torchvision import transforms
+
+    # Gleiche Transforms wie im Training!
+    transform = transforms.Compose([
+        transforms.Resize((128, 128)),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5),
+                            (0.5, 0.5, 0.5))
+    ])
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    class TinyFaceNet(nn.Module):
+        def __init__(self):
+            super(TinyFaceNet, self).__init__()
+            self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1)
+            self.bn1   = nn.BatchNorm2d(16)
+            self.pool1 = nn.MaxPool2d(2, 2)   # 64x64
+
+            self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
+            self.bn2   = nn.BatchNorm2d(32)
+            self.pool2 = nn.MaxPool2d(2, 2)   # 32x32
+
+            self.conv3 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
+            self.bn3   = nn.BatchNorm2d(64)
+            self.pool3 = nn.MaxPool2d(2, 2)   # 16x16
+
+            self.conv4 = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1)
+            self.bn4   = nn.BatchNorm2d(128)
+            self.pool4 = nn.MaxPool2d(2, 2)   # 8x8
+
+            self.fc1 = nn.Linear(128 * 8 * 8, 256)
+            self.dropout = nn.Dropout(0.5)  # 50% Dropout
+            self.fc2 = nn.Linear(256, 1)
+
+        def forward(self, x):
+            x = self.pool1(F.relu(self.bn1(self.conv1(x))))
+            x = self.pool2(F.relu(self.bn2(self.conv2(x))))
+            x = self.pool3(F.relu(self.bn3(self.conv3(x))))
+            x = self.pool4(F.relu(self.bn4(self.conv4(x))))
+            x = x.view(-1, 128 * 8 * 8)
+            x = F.relu(self.fc1(x))
+            x = self.dropout(x)
+            x = torch.sigmoid(self.fc2(x))
+            return x
+
+    model = TinyFaceNet().to(device)
+    model.load_state_dict(torch.load("tinyfacenet_best.pth", map_location=device))
+    model.eval()
+
 # Robots.txt parser for Wikipedia
 def check_robots_txt(url):
     """Checks if the URL is allowed according to robots.txt."""
@@ -441,10 +496,26 @@ def process_image(image, image_bytes, img_url, page_url):
     except Exception as e:
         print(f"Error processing image {img_url}: {e}")
 
+def prepare_image_for_model(np_image, device="cpu"):
+    # NumPy (H, W, 3) -> PIL.Image
+    pil_image = Image.fromarray(np_image)
+
+    # PIL -> Tensor (1, 3, 128, 128)
+    tensor_image = transform(pil_image).unsqueeze(0).to(device)
+
+    return tensor_image
+
 def image_bytes_contains_face(image):
     try:
-        faces = face_recognition.face_locations(image)
-        return len(faces) > 0
+        if model:
+            tensor_image = prepare_image_for_model(image, device)
+            with torch.no_grad():
+                output = model(tensor_image)
+                prob = output.squeeze().item()
+                return prob >= 0.5
+        else:
+            faces = face_recognition.face_locations(image)
+            return len(faces) > 0
     except Exception as e:
         print(f"Error checking image: {e}")
         return False
