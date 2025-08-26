@@ -1,3 +1,6 @@
+aiohappyeyeballs==2.6.1
+aiohttp==3.12.15
+aiosignal==1.4.0
 altair==5.5.0
 attrs==25.3.0
 beautifulsoup4==4.13.4
@@ -7,24 +10,33 @@ certifi==2025.7.14
 charset-normalizer==3.4.2
 click==8.2.1
 colorama==0.4.6
+datasets==4.0.0
+dill==0.3.8
 dlib-bin==19.24.6
 face_recognition @ git+https://github.com/thetoby9944/face_recognition.git@d632e2e8d5b5b286d944c333f3ff4433dafabb19
 face_recognition_models==0.3.0
 filelock==3.19.1
+frozenlist==1.7.0
+fsspec==2025.3.0
 gdown==5.2.0
 gitdb==4.0.12
 GitPython==3.1.45
+hf-xet==1.1.8
+huggingface-hub==0.34.4
 idna==3.10
 ImageHash==4.3.2
 Jinja2==3.1.6
 jsonschema==4.25.0
 jsonschema-specifications==2025.4.1
 MarkupSafe==3.0.2
+multidict==6.6.4
+multiprocess==0.70.16
 narwhals==2.0.1
 numpy==2.2.6
 packaging==25.0
 pandas==2.3.1
 pillow==11.3.0
+propcache==0.3.2
 protobuf==6.31.1
 pyarrow==21.0.0
 pydeck==0.9.1
@@ -32,6 +44,7 @@ PySocks==1.7.1
 python-dateutil==2.9.0.post0
 pytz==2025.2
 PyWavelets==1.8.0
+PyYAML==6.0.2
 referencing==0.36.2
 requests==2.32.4
 rpds-py==0.26.0
@@ -51,3 +64,5 @@ urllib3==2.5.0
 warcio==1.7.5
 watchdog==6.0.0
 wheel==0.45.1
+xxhash==3.5.0
+yarl==1.20.1
