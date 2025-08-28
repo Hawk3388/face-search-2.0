@@ -2,43 +2,40 @@ import os
 import random
 import shutil
 import zipfile
+# import requests
+# from tqdm import tqdm
 from datasets import load_dataset
-import requests
-from tqdm import tqdm
+from PIL import Image
 
-# --------------------
-# Helper Funktionen
-# --------------------
-def download_file(url, dest_path):
-    if os.path.exists(dest_path):
-        print(f"✔ {dest_path} existiert schon, überspringe Download.")
-        return dest_path
-    response = requests.get(url, stream=True)
-    total = int(response.headers.get("content-length", 0))
-    with open(dest_path, "wb") as file, tqdm(
-        desc=f"Downloading {os.path.basename(dest_path)}",
-        total=total,
-        unit="B",
-        unit_scale=True,
-        unit_divisor=1024,
-    ) as bar:
-        for data in response.iter_content(chunk_size=1024):
-            size = file.write(data)
-            bar.update(size)
-    return dest_path
+# def download_file(url, dest_path):
+#     if os.path.exists(dest_path):
+#         print(f"✔ {dest_path} existiert schon, überspringe Download.")
+#         return dest_path
+#     response = requests.get(url, stream=True)
+#     total = int(response.headers.get("content-length", 0))
+#     with open(dest_path, "wb") as file, tqdm(
+#         desc=f"Downloading {os.path.basename(dest_path)}",
+#         total=total,
+#         unit="B", unit_scale=True, unit_divisor=1024
+#     ) as bar:
+#         for data in response.iter_content(chunk_size=1024):
+#             size = file.write(data)
+#             bar.update(size)
+#     return dest_path
 
 def extract_zip(zip_path, extract_to):
     with zipfile.ZipFile(zip_path, "r") as zip_ref:
         zip_ref.extractall(extract_to)
 
 def ensure_dir(path):
-    if not os.path.exists(path):
-        os.makedirs(path)
+    os.makedirs(path, exist_ok=True)
 
-# --------------------
-# Hauptskript
-# --------------------
-def prepare_dataset():
+def save_and_resize(example, dest_dir, prefix, idx, size=(128, 128)):
+    img = example["image"].convert("RGB")
+    img = img.resize(size, Image.LANCZOS)
+    img.save(os.path.join(dest_dir, f"{prefix}_{idx}.jpg"), "JPEG")
+
+def prepare_dataset(n_faces=10000, n_nofaces=10000):
     base_dir = "images"
     face_dir = os.path.join(base_dir, "faces")
     noface_dir = os.path.join(base_dir, "no_faces")
@@ -46,40 +43,35 @@ def prepare_dataset():
     ensure_dir(face_dir)
     ensure_dir(noface_dir)
 
-    # --- 1. WIDER FACE (Faces) ---
-    wider_url = "https://huggingface.co/datasets/wider_face/resolve/main/WIDER_train.zip"
+    # 1. WIDER FACE
+    # Download WIDER_train.zip file from https://huggingface.co/datasets/CUHK-CSE/wider_face/tree/main/data and copy it in this directory
+    # wider_url = "https://huggingface.co/datasets/wider_face/resolve/main/WIDER_train.zip"
     wider_zip = "WIDER_train.zip"
-    download_file(wider_url, wider_zip)
+    # download_file(wider_url, wider_zip)
     extract_zip(wider_zip, "wider")
 
-    # Flatten all images from subfolders
-    source_faces = os.path.join("wider", "WIDER_train", "images")
-    all_images = []
-    for root, _, files in os.walk(source_faces):
-        for f in files:
-            if f.lower().endswith((".jpg", ".png")):
-                all_images.append(os.path.join(root, f))
-
-    subset_faces = random.sample(all_images, 10000)
+    wider_images = [
+        os.path.join(root, f)
+        for root, _, files in os.walk("wider/WIDER_train/images")
+        for f in files if f.lower().endswith((".jpg", ".png"))
+    ]
+    print(f"Gefundene WIDER-FACE Bilder: {len(wider_images)}")
+    subset_faces = random.sample(wider_images, n_faces)
     for i, src in enumerate(subset_faces):
-        shutil.copy(src, os.path.join(face_dir, f"face_{i:05d}.jpg"))
+        shutil.copy(src, os.path.join(face_dir, f"face_{i}.jpg"))
 
-    # --- 2. BG-20k (No-Faces) ---
-    print("Loading BG-20k dataset for No-Faces...")
-    no_faces_dataset = load_dataset("unography/BG-20k-1200px", split="train")
+    # 2. BG-20k-1200px
+    print("⬇ Lade No-Face Dataset (BG-20k-1200px)…")
+    bg = load_dataset("unography/BG-20k-1200px", split="train", streaming=True)
 
-    # Randomly select 10,000 images
-    all_no_faces = list(no_faces_dataset)
-    subset_no_faces = random.sample(all_no_faces, 10000)
+    for i, example in enumerate(bg):
+        if i >= n_nofaces:
+            break
+        save_and_resize(example, noface_dir, "noface", i)
 
-    for i, sample in enumerate(subset_no_faces):
-        img = sample["image"]
-        save_path = os.path.join(noface_dir, f"bg_{i:05d}.jpg")
-        img.save(save_path, format="JPEG")
-
-    print("✅ Dataset prepared!")
-    print(f"- {len(os.listdir(face_dir))} Faces in {face_dir}")
-    print(f"- {len(os.listdir(noface_dir))} No-Face images in {noface_dir}")
+    print("✅ Dataset fertig vorbereitet! ")
+    print(f"- {len(os.listdir(face_dir))} Gesichter in {face_dir}")
+    print(f"- {len(os.listdir(noface_dir))} Non-Faces in {noface_dir}")
 
 if __name__ == "__main__":
     prepare_dataset()

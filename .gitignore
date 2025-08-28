@@ -6,3 +6,6 @@ last_crawled_page.txt
 images/
 commands.txt
 __pycache__/
+*.zip
+wider/
+*.pth
