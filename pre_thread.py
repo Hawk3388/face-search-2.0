@@ -1,6 +1,7 @@
 import os
 import re
 from bs4 import BeautifulSoup
+import requests
 
 USER_AGENT = "FaceSearchBot/1.0 (Educational Research; Contact: github.com/Hawk3388/face-search-2.0)"
 
@@ -16,8 +17,6 @@ def get_last_crawled_page():
     except Exception as e:
         print(f"Error reading last page: {e}")
     return None
-
-import requests
 
 def get_article_index_in_category(article_url, category="Living people"):
     title_to_find = article_url.split("/")[-1].replace("_", " ")
@@ -37,7 +36,8 @@ def get_article_index_in_category(article_url, category="Living people"):
         if cmcontinue:
             params["cmcontinue"] = cmcontinue
 
-        resp = requests.get(API_URL, params=params)
+        headers = {"User-Agent": USER_AGENT}
+        resp = requests.get(API_URL, params=params, headers=headers)
         resp.raise_for_status()
         data = resp.json()
         members = data["query"]["categorymembers"]
@@ -89,7 +89,7 @@ def get_current_category_pages_url(last_pages, num_threads=8):
     API_URL = "https://en.wikipedia.org/w/api.php"
     CATEGORY = "Living people"
     target_urls = []
-    limit = last_pages // 10 if last_pages > 1000 else last_pages
+    limit = last_pages // 10 if last_pages[-1] > 1000 else last_pages
 
     params = {
         "action": "query",
@@ -177,7 +177,7 @@ if __name__ == "__main__":
             threads = 8
             break
         print("Please enter a number between 1 and 25.")
-    start_threads = [to_go // threads * i for i in range(threads)]
+    start_threads = [to_go // threads * i + base_index for i in range(threads)]
     last_pages = get_current_category_pages_url(start_threads, threads)
     for i, page in enumerate(last_pages):
         save_last_crawled_pages(page, i)
