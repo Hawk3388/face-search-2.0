@@ -385,10 +385,10 @@ def download_image(img_url):
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):
         try:
-            # Respect robots.txt
-            if not check_robots_txt(img_url):
-                print(f"⚠️ robots.txt forbids access to: {img_url}")
-                return None
+            # # Respect robots.txt
+            # if not check_robots_txt(img_url):
+            #     print(f"⚠️ robots.txt forbids access to: {img_url}")
+            #     return None
             
             headers = {
                 "User-Agent": USER_AGENT,
@@ -981,7 +981,8 @@ def crawl_images():
         print("Starting new crawling session (append-only)...")
     
     # Determine current category page URL
-    current_category_url = get_current_category_page_url(last_page)
+    current_category_url = wikipedia_url_to_category_link(last_page)
+    print(f"Current category page URL: {current_category_url}")
     
     while current_category_url:
         print(f"\n--- Processing category page: {current_category_url} ---")
