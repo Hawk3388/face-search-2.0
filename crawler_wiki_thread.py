@@ -10,6 +10,8 @@ if cuda:
     os.environ['PATH'] = cuda_path + r'\bin;' + os.environ.get('PATH', '')
     os.environ['PATH'] = cudnn_path + ';' + os.environ.get('PATH', '')
 
+cuda = False
+
 import requests
 from bs4 import BeautifulSoup
 import face_recognition
@@ -1078,28 +1080,24 @@ def crawl_images():
         print(f"✓ Category page completed. Processed articles: {processed_count}")
             
         current_category_url = next_category_url
-        if not current_category_url:
-            print("⚠️ No more category pages found - starting from beginning...")
-            # Instead of stopping, start from the beginning
-            current_category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
-            time.sleep(300)  # Wait 5 minutes before restart
+        # if not current_category_url:
+        #     print("⚠️ No more category pages found - starting from beginning...")
+        #     # Instead of stopping, start from the beginning
+        #     current_category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
+        #     time.sleep(300)  # Wait 5 minutes before restart
 
     print(f"Crawling completed. {entries_saved} new entries added to database.")
 
 def process_images_in_article(images, url):
     results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        futures = []
-        for img in images:
-            img_url = img.get("src")
-            if not img_url:
-                continue
-            img_url = urllib.parse.urljoin(url, img_url)
-            futures.append(executor.submit(process_single_image, img_url, url))
-        for future in concurrent.futures.as_completed(futures):
-            result = future.result()
-            if result:
-                results.append(result)
+    for img in images:
+        img_url = img.get("src")
+        if not img_url:
+            continue
+        img_url = urllib.parse.urljoin(url, img_url)
+        result = process_single_image(img_url, url)
+        if result:
+            results.append(result)
     return results
 
 def process_single_image(img_url, page_url):
@@ -1138,7 +1136,7 @@ if __name__ == "__main__":
         print(f"Unexpected error: {e}")
         save_database()
         close_database()
-        print("Database was saved despite error.")
+        print("Database was saved trotz Fehler.")
     finally:
         # Ensure database is saved and closed in any case
         save_database()
