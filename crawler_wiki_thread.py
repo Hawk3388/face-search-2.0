@@ -1,9 +1,11 @@
 import os
+import dlib
+
 # Set CUDA paths for dlib/face_recognition
 cuda_path = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1"
 cudnn_path = r"C:\Program Files\NVIDIA\CUDNN\v9.6\bin\12.6"
 
-cuda = True if os.path.exists(cuda_path) and os.path.exists(cudnn_path) else False
+cuda = True if os.path.exists(cuda_path) and os.path.exists(cudnn_path) and dlib.DLIB_USE_CUDA else False
 
 # Add CUDA libraries to PATH
 if cuda:
@@ -41,7 +43,10 @@ MAX_CONSECUTIVE_429 = 10  # Stop after 10 consecutive 429 errors
 
 model = None
 
-if os.path.exists("tinyfacenet_best.pth"):
+# Check for LOW_RAM environment variable to disable PyTorch model
+low_ram = os.environ.get('LOW_RAM', '0').lower() in ('1', 'true', 'yes')
+
+if os.path.exists("tinyfacenet_best.pth") and not low_ram:
     try:
         import torch
         import torch.nn as nn
@@ -97,8 +102,14 @@ if os.path.exists("tinyfacenet_best.pth"):
         model = TinyFaceNet_inference().to(device)
         model.load_state_dict(torch.load("tinyfacenet_best.pth", map_location=device))
         model.eval()
+        print("PyTorch model loaded successfully.")
     except Exception as e:
-        print(f"Error loading model: {e}, running face detection with face_recognition.")
+        print(f"Error loading PyTorch model: {e}, running face detection with face_recognition only.")
+        model = None
+elif low_ram:
+    print("LOW_RAM mode enabled - skipping PyTorch model loading.")
+else:
+    print("No model file found, running face detection with face_recognition only.")
 
 # Robots.txt parser for Wikipedia
 def check_robots_txt(url):
@@ -411,12 +422,27 @@ def download_image(img_url):
             
             # Complete download
             image_bytes = response.content
+            response.close()  # Close response immediately
+            
             if len(image_bytes) > 2 * 1024 * 1024:
                 size_mb = len(image_bytes) / 1024 / 1024
                 print(f"⚠️ Image too large ({size_mb:.1f}MB): {img_url}")
                 return None
             
-            print(f"✅ Image successfully downloaded ({len(image_bytes)/1024:.1f}KB)")
+            # Reduce image size to save memory (for low RAM systems)
+            try:
+                img = Image.open(BytesIO(image_bytes)).convert("RGB")
+                max_size = (256, 256)  # Reduce to 256x256 max
+                img.thumbnail(max_size, Image.LANCZOS)
+                out_io = BytesIO()
+                img.save(out_io, format="JPEG", quality=85)
+                image_bytes = out_io.getvalue()
+                out_io.close()
+                del img
+                print(f"✅ Image resized and downloaded ({len(image_bytes)/1024:.1f}KB)")
+            except Exception:
+                # If resize fails, continue with original bytes
+                print(f"✅ Image downloaded ({len(image_bytes)/1024:.1f}KB)")
             
             # Successful download - reset 429 counter
             consecutive_429_errors = 0
@@ -1071,8 +1097,8 @@ def crawl_images():
             # Save last crawled article (for resume function)
             save_last_crawled_page(url)
 
-            # Regular garbage collection every 10 articles to avoid memory leaks
-            if processed_count % 10 == 0:
+            # Regular garbage collection every 2 articles to avoid memory leaks (more frequent for low RAM)
+            if processed_count % 2 == 0:
                 gc.collect()
                 print(f"🧹 Garbage collection performed after {processed_count} articles")
         
@@ -1089,16 +1115,12 @@ def crawl_images():
     print(f"Crawling completed. {entries_saved} new entries added to database.")
 
 def process_images_in_article(images, url):
-    results = []
     for img in images:
         img_url = img.get("src")
         if not img_url:
             continue
         img_url = urllib.parse.urljoin(url, img_url)
-        result = process_single_image(img_url, url)
-        if result:
-            results.append(result)
-    return results
+        process_single_image(img_url, url)
 
 def process_single_image(img_url, page_url):
     image_bytes = download_image(img_url)
@@ -1109,35 +1131,108 @@ def process_single_image(img_url, page_url):
         if image_bytes_contains_face(image):
             if not compare_hashes(get_phash(image_bytes)):
                 process_image(image, image_bytes, img_url, page_url)
-                return True
+                result = True
             else:
                 print(f"Image already present in current article: {img_url}")
+                result = False
         else:
             print(f"No face found: {img_url}")
+            result = False
+        
+        # Immediate memory cleanup after processing
         del image, image_bytes
+        gc.collect()
+        return result
     except Exception as e:
         print(f"Error loading image {img_url}: {e}")
+        # Cleanup on error
+        if 'image' in locals():
+            del image
+        if 'image_bytes' in locals():
+            del image_bytes
+        gc.collect()
     return None
 
 if __name__ == "__main__":
-    print("Starting Living People Crawler (append-only)...")
-    try:
-        if cuda:
-            crawl_images_thread()
-        else:
-            crawl_images()  # adjust max_pages
-    except KeyboardInterrupt:
-        # In case the signal handler is not triggered
-        print("\nInterrupt detected! Saving database...")
-        save_database()
-        close_database()
-        print("Crawler terminated.")
-    except Exception as e:
-        print(f"Unexpected error: {e}")
-        save_database()
-        close_database()
-        print("Database was saved trotz Fehler.")
-    finally:
-        # Ensure database is saved and closed in any case
-        save_database()
-        close_database()
+    # Auto-restart configuration
+    max_restarts_per_hour = 10
+    restart_count = 0
+    start_time = time.time()
+    restart_delays = [30, 60, 120, 300, 600]  # Progressive delays: 30s, 1m, 2m, 5m, 10m
+
+    print("Starting Living People Crawler (append-only) with auto-restart...")
+
+    while True:
+        try:
+            # Check if we've exceeded restart limit per hour
+            current_time = time.time()
+            if current_time - start_time > 3600:  # Reset counter every hour
+                restart_count = 0
+                start_time = current_time
+
+            if restart_count >= max_restarts_per_hour:
+                print(f"\n🚨 Too many restarts ({restart_count}) in the last hour. Stopping crawler.")
+                print("Please check for persistent issues.")
+                break
+
+            print(f"\n{'='*50}")
+            print(f"Starting crawler session #{restart_count + 1}")
+            print(f"{'='*50}")
+
+            if cuda:
+                crawl_images_thread()
+            else:
+                crawl_images()  # adjust max_pages
+
+        except KeyboardInterrupt:
+            # In case the signal handler is not triggered
+            print("\nInterrupt detected! Saving database...")
+            save_database()
+            close_database()
+            print("Crawler terminated by user.")
+            break
+
+        except OSError as e:
+            if "swap" in str(e).lower() or "read-error" in str(e).lower():
+                print(f"\nSwap error detected: {e}")
+                print("Attempting to continue after memory cleanup...")
+                gc.collect()
+                time.sleep(10)  # Wait for system to recover
+                # Try to continue
+                try:
+                    if cuda:
+                        crawl_images_thread()
+                    else:
+                        crawl_images()
+                    continue  # Success, continue main loop
+                except Exception as e2:
+                    print(f"Failed to recover from swap error: {e2}")
+                    save_database()
+                    close_database()
+            else:
+                raise
+
+        except Exception as e:
+            print(f"\nUnexpected error: {e}")
+            print("Saving database and preparing for restart...")
+            save_database()
+            close_database()
+
+        # If we reach here, there was an error - prepare for restart
+        restart_count += 1
+
+        # Calculate delay with progressive backoff
+        delay_index = min(restart_count - 1, len(restart_delays) - 1)
+        delay = restart_delays[delay_index]
+
+        print(f"\n🔄 Restart #{restart_count} scheduled in {delay} seconds...")
+        print(f"Total restarts in last hour: {restart_count}/{max_restarts_per_hour}")
+
+        # Wait before restart
+        time.sleep(delay)
+
+        # Force garbage collection before restart
+        gc.collect()
+        print("🧹 Memory cleaned up. Restarting crawler...\n")
+
+    print("\nCrawler stopped.")
