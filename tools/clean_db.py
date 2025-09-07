@@ -12,8 +12,8 @@ def load_database(path="face_embeddings.json"):
     except FileNotFoundError:
         print(f"File {path} not found!")
         return []
-    except json.JSONDecodeError:
-        print(f"Error loading JSON file {path}")
+    except json.JSONDecodeError as e:
+        print(f"Error loading JSON file {path}: {e}")
         return []
 
 def str_to_phash(phash_str):

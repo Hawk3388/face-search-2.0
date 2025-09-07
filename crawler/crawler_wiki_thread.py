@@ -224,17 +224,59 @@ def get_visited_pages_from_db():
     """Since we don't do reading - return empty set."""
     return set()
 
+def extract_last_page_url(file_path, max_read_bytes=50000):
+    """
+    Reads the file from the end and extracts the last 'page_url'.
+    max_read_bytes: Bytes to read backwards (increase if needed).
+    """
+    try:
+        with open(file_path, 'rb') as f:
+            f.seek(0, 2)  # Go to the end
+            file_size = f.tell()
+            read_size = min(max_read_bytes, file_size)
+            f.seek(file_size - read_size)
+            data_bytes = f.read()
+            if data_bytes is None:
+                print("⚠️ File read returned None - possible file corruption")
+                return None
+            data = data_bytes.decode('utf-8', errors='ignore')
+        
+        # Search for the last "page_url" in the data
+        # Regex: "page_url": "VALUE"
+        match = re.search(r'"page_url"\s*:\s*"([^"]+)"', data)
+        if match:
+            return match.group(1)  # Extract the value
+        else:
+            return None
+    except Exception as e:
+        print(f"Error: {e}")
+        return None
+
 def get_last_crawled_page():
     """Reads the last crawled article from a small separate file."""
     try:
         if os.path.exists("last_crawled_page.txt"):
             with open("last_crawled_page.txt", "r", encoding="utf-8") as f:
-                last_page = f.read().strip()
+                content = f.read()
+                if content is None:
+                    print("⚠️ File read returned None - possible file corruption")
+                    return None
+                last_page = content.strip()
                 if last_page:
                     print(f"📄 Last crawled article: {last_page}")
                     return last_page
+                else:
+                    if os.path.exists("face_embeddings.json"):
+                        print("⚠️ last_crawled_page.txt is empty - trying to read last page from database.")
+                        last_page = extract_last_page_url("face_embeddings.json")
+                        if last_page:
+                            save_last_crawled_page(last_page)
+                            print(f"📄 Last crawled article from database: {last_page}")
+                            return last_page
+                        else:
+                            print("⚠️ No last page found in database - starting fresh.")
     except Exception as e:
-        print(f"Error reading last page: {e}")
+        print(f"Error reading last crawled page: {e}")
     return None
 
 def get_last_crawled_pages(filename="last_crawled_page.txt"):
@@ -1180,8 +1222,10 @@ if __name__ == "__main__":
             print(f"{'='*50}")
 
             if cuda:
+                print("Using CUDA for image processing.")
                 crawl_images_thread()
             else:
+                print("CUDA not available - using CPU for image processing.")
                 crawl_images()  # adjust max_pages
 
         except KeyboardInterrupt:
@@ -1201,8 +1245,10 @@ if __name__ == "__main__":
                 # Try to continue
                 try:
                     if cuda:
+                        print("Using CUDA for image processing.")
                         crawl_images_thread()
                     else:
+                        print("CUDA not available - using CPU for image processing.")
                         crawl_images()
                     continue  # Success, continue main loop
                 except Exception as e2:
