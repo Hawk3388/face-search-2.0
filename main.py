@@ -47,10 +47,17 @@ def serverless(encodings, db):
             st.markdown(f"**Similarity**: {dist:.4f}")
             st.markdown(f"[View image]({entry['image_url']})  \n[Visit page]({entry['page_url']})")
             try:
-                img_bytes = requests.get(entry['image_url'], timeout=60).content
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                response = requests.get(entry['image_url'], timeout=60, headers=headers)
+                response.raise_for_status()
+                img_bytes = response.content
                 st.image(Image.open(BytesIO(img_bytes)), width=250)
-            except Exception:
-                st.warning("Image could not be loaded.")
+            except requests.exceptions.Timeout:
+                st.warning("⏰ Image loading timeout (>60s)")
+            except requests.exceptions.RequestException as e:
+                st.warning(f"🌐 Network error loading image: {str(e)[:50]}...")
+            except Exception as e:
+                st.warning(f"🖼️ Image processing error: {str(e)[:50]}...")
 
 def server(encodings):
     try:
@@ -87,10 +94,18 @@ def server(encodings):
                         continue
                         
                     try:
-                        img_bytes = requests.get(img_url, timeout=60).content
+                        USER_AGENT = "FaceSearchBot/1.0 (Educational Research; Contact: github.com/Hawk3388/face-search-2.0)"
+                        headers = {'User-Agent': USER_AGENT}
+                        response = requests.get(img_url, timeout=60, headers=headers)
+                        response.raise_for_status()
+                        img_bytes = response.content
                         st.image(Image.open(BytesIO(img_bytes)), width=250)
-                    except Exception:
-                        st.warning("Image could not be loaded.")
+                    except requests.exceptions.Timeout:
+                        st.warning("⏰ Image loading timeout (>60s)")
+                    except requests.exceptions.RequestException as e:
+                        st.warning(f"🌐 Network error loading image: {str(e)[:50]}...")
+                    except Exception as e:
+                        st.warning(f"🖼️ Image processing error: {str(e)[:50]}...")
         else:
             st.error(f"API Error: {api_response.get('error', 'Unknown error')}")
     except Exception as e:
