@@ -70,10 +70,24 @@ def server(encodings):
             else:
                 st.success(f"✅ {len(results)} matches found!")
                 for match in results[:10]:  # show top 10
-                    st.markdown(f"**Distance**: {match['distance']:.4f} | **Similarity**: {match['similarity']:.3f}")
-                    st.markdown(f"[View image]({match['image_url']})  \n[Visit page]({match['page_url']})")
+                    # Handle different response formats from server
+                    if isinstance(match, list) and len(match) >= 2:
+                        # Format: [entry_dict, distance]
+                        entry, distance = match[0], match[1]
+                        st.markdown(f"**Distance**: {distance:.4f}")
+                        st.markdown(f"[View image]({entry['image_url']})  \n[Visit page]({entry['page_url']})")
+                        img_url = entry['image_url']
+                    elif isinstance(match, dict):
+                        # Format: {"distance": x, "similarity": y, "image_url": z, ...}
+                        st.markdown(f"**Distance**: {match['distance']:.4f} | **Similarity**: {match['similarity']:.3f}")
+                        st.markdown(f"[View image]({match['image_url']})  \n[Visit page]({match['page_url']})")
+                        img_url = match['image_url']
+                    else:
+                        st.warning("Unknown response format from server")
+                        continue
+                        
                     try:
-                        img_bytes = requests.get(match['image_url'], timeout=60).content
+                        img_bytes = requests.get(img_url, timeout=60).content
                         st.image(Image.open(BytesIO(img_bytes)), width=250)
                     except Exception:
                         st.warning("Image could not be loaded.")
