@@ -559,19 +559,41 @@ def download_image(img_url):
 
 def process_image(image, image_bytes, img_url, page_url):
     try:
-        encodings = face_recognition.face_encodings(image, model="large")
+        # Detect all faces in the image
+        face_locations = face_recognition.face_locations(image, model="hog")
+        encodings = face_recognition.face_encodings(image, face_locations, model="large")
+        
         if encodings:
             phash = get_phash(image_bytes)
-            embedding = encodings[0].tolist()
-            entry = {
-                "image_url": img_url,
-                "page_url": page_url,
-                "embedding": embedding,
-                "phash": str(phash)
-            }
-            # Add to current article data (memory-efficient)
-            current_article_data.append(entry)
-            print(f"Face found in {img_url}")
+            
+            # Check for duplicate image first (by hash)
+            if is_duplicate_by_hash(phash):
+                print(f"Duplicate image detected by hash: {img_url}")
+                return
+            
+            faces_added = 0
+            # Process each face separately
+            for i, encoding in enumerate(encodings):
+                # Check if this specific face encoding is a duplicate
+                if not is_duplicate_by_encoding(encoding.tolist()):
+                    entry = {
+                        "image_url": img_url,
+                        "page_url": page_url,
+                        "embedding": encoding.tolist(),
+                        "phash": str(phash),
+                        "face_index": i  # Track which face in the image this is
+                    }
+                    # Add to current article data (memory-efficient)
+                    current_article_data.append(entry)
+                    faces_added += 1
+                else:
+                    print(f"Duplicate face encoding detected in {img_url} (face {i+1})")
+            
+            if faces_added > 0:
+                print(f"{faces_added} face(s) added from {img_url} (total faces detected: {len(encodings)})")
+            else:
+                print(f"All faces in {img_url} were duplicates")
+                
     except Exception as e:
         print(f"Error processing image {img_url}: {e}")
 
@@ -610,6 +632,10 @@ def str_to_phash(phash_str):
         print(f"Error converting phash: {e}")
         return None
 
+# Global sets for duplicate detection across all processed images
+processed_hashes = set()
+processed_encodings = []
+
 def compare_hashes(phash):
     """Da wir keine Datei lesen - immer False (keine Duplikate erkennen)."""
     # Nur in aktuellen Artikel-Daten prüfen
@@ -617,6 +643,55 @@ def compare_hashes(phash):
         existing_phash = str_to_phash(entry["phash"])
         if existing_phash and existing_phash - phash < 5:
             return True
+    return False
+
+def is_duplicate_by_hash(phash):
+    """Check if image hash already exists in processed images."""
+    phash_str = str(phash)
+    
+    # Check in current article data
+    for entry in current_article_data:
+        existing_phash = str_to_phash(entry["phash"])
+        if existing_phash and existing_phash - phash < 5:
+            return True
+    
+    # Check in global processed hashes (for session-wide duplicate detection)
+    for existing_hash_str in processed_hashes:
+        existing_phash = str_to_phash(existing_hash_str)
+        if existing_phash and existing_phash - phash < 5:
+            return True
+    
+    # Add to processed hashes
+    processed_hashes.add(phash_str)
+    return False
+
+def is_duplicate_by_encoding(encoding):
+    """Check if face encoding is too similar to already processed faces."""
+    import numpy as np
+    
+    query_embedding = np.array(encoding)
+    
+    # Check in current article data
+    for entry in current_article_data:
+        db_embedding = np.array(entry["embedding"])
+        distance = np.linalg.norm(query_embedding - db_embedding)
+        if distance <= 0.3:  # Stricter threshold for duplicates
+            return True
+    
+    # Check in global processed encodings (limited to last 1000 for memory)
+    for existing_encoding in processed_encodings[-1000:]:  # Only check last 1000 encodings
+        db_embedding = np.array(existing_encoding)
+        distance = np.linalg.norm(query_embedding - db_embedding)
+        if distance <= 0.3:  # Stricter threshold for duplicates
+            return True
+    
+    # Add to processed encodings
+    processed_encodings.append(encoding)
+    
+    # Keep only last 1000 encodings to prevent memory issues
+    if len(processed_encodings) > 1000:
+        processed_encodings.pop(0)
+    
     return False
 
 def get_current_category_page_url(last_page):
@@ -1037,9 +1112,17 @@ def thread_wiki(current_category_url, i):
             print("⚠️ No more category pages found - starting from beginning...")
             # Instead of stopping, start from the beginning
             current_category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
+            print("🔄 Waiting 5 minutes before restarting from the beginning...")
             time.sleep(300)  # Wait 5 minutes before restart
+            
+            # Reset duplicate detection for new cycle (optional)
+            # Uncomment next lines if you want to reset duplicate detection completely for each cycle
+            # global processed_hashes, processed_encodings
+            # processed_hashes.clear()
+            # processed_encodings.clear()
+            # print("🧹 Duplicate detection cache cleared for new cycle")
 
-    print(f"Crawling completed. {entries_saved} new entries added to database.")
+    print(f"Crawling cycle completed. {entries_saved} new entries added to database.")
 
 def crawl_images():
     global queue, current_article_data
@@ -1151,13 +1234,21 @@ def crawl_images():
         print(f"✓ Category page completed. Processed articles: {processed_count}")
             
         current_category_url = next_category_url
-        # if not current_category_url:
-        #     print("⚠️ No more category pages found - starting from beginning...")
-        #     # Instead of stopping, start from the beginning
-        #     current_category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
-        #     time.sleep(300)  # Wait 5 minutes before restart
+        if not current_category_url:
+            print("⚠️ No more category pages found - starting from beginning...")
+            # Instead of stopping, start from the beginning
+            current_category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
+            print("🔄 Waiting 5 minutes before restarting from the beginning...")
+            time.sleep(300)  # Wait 5 minutes before restart
+            
+            # Reset duplicate detection for new cycle (optional - keeps some memory of previous cycle)
+            # Uncomment next lines if you want to reset duplicate detection completely for each cycle
+            # global processed_hashes, processed_encodings
+            # processed_hashes.clear()
+            # processed_encodings.clear()
+            # print("🧹 Duplicate detection cache cleared for new cycle")
 
-    print(f"Crawling completed. {entries_saved} new entries added to database.")
+    print(f"Crawling cycle completed. {entries_saved} new entries added to database.")
 
 def process_images_in_article(images, url):
     for img in images:
@@ -1174,12 +1265,9 @@ def process_single_image(img_url, page_url):
     try:
         image = face_recognition.load_image_file(BytesIO(image_bytes))
         if image_bytes_contains_face(image):
-            if not compare_hashes(get_phash(image_bytes)):
-                process_image(image, image_bytes, img_url, page_url)
-                result = True
-            else:
-                print(f"Image already present in current article: {img_url}")
-                result = False
+            # Process image (now handles multiple faces and duplicates internally)
+            process_image(image, image_bytes, img_url, page_url)
+            result = True
         else:
             print(f"No face found: {img_url}")
             result = False
