@@ -82,6 +82,17 @@ def server(encodings):
     except Exception as e:
         st.error(f"Error contacting API: {e}")
 
+# Check API health
+def check_api_health():
+    if not API_URL or not TOKEN:
+        return False
+    try:
+        headers = {'Authorization': f'Bearer {TOKEN}'}
+        response = requests.get(f"{API_URL}/health", headers=headers, timeout=5)
+        return response.status_code == 200
+    except Exception:
+        return False
+
 def main():
     # App
     st.set_page_config(page_title="Face Search", layout="centered")
@@ -92,52 +103,25 @@ def main():
     if os.path.exists(path):
         db = load_database(path)
 
-    # Sidebar for settings
-    st.sidebar.header("⚙️ Search Settings")
-    
-    # Check API health
-    def check_api_health():
-        if not API_URL:
-            return False
-        try:
-            headers = {}
-            if TOKEN:
-                headers['Authorization'] = f'Bearer {TOKEN}'
-            response = requests.get(f"{API_URL}/health", headers=headers, timeout=5)
-            return response.status_code == 200
-        except Exception:
-            return False
-    
-    # Check availability
-    api_available = check_api_health()
+    # Determine mode automatically
     local_available = os.path.exists(path)
     
-    # Mode selection if both are available
-    if api_available and local_available:
-        st.sidebar.subheader("🔄 Search Mode")
-        search_mode = st.sidebar.radio(
-            "Choose search method:",
-            ["🌐 Server Mode (API)", "💻 Local Mode"],
-            help="Server mode uses the API, Local mode uses the local database file"
-        )
-        use_server = "Server" in search_mode
-        
-        if use_server:
-            st.sidebar.success("🌐 Using Server Mode")
-        else:
-            st.sidebar.info("💻 Using Local Mode")
-            st.sidebar.write(f"Database: {len(db) if 'db' in locals() else 0} entries")
-    
-    # Single option available
-    elif api_available:
-        st.sidebar.success("🌐 Server Mode (Only)")
-        use_server = True
-    elif local_available:
-        st.sidebar.info("💻 Local Mode (Only)")
-        st.sidebar.write(f"Database: {len(db) if 'db' in locals() else 0} entries")
+    if local_available:
         use_server = False
+        st.info(f"💻 Using local database ({len(db) if 'db' in locals() else 0} entries)")
+    elif API_URL and TOKEN:
+        # Only check API health if no local DB is available
+        api_available = check_api_health()
+        if api_available:
+            use_server = True
+            st.info("🌐 Using API server")
+        else:
+            st.error("❌ No local database found and API server is not reachable!")
+            st.stop()
+            use_server = False
     else:
-        st.sidebar.error("❌ No database or API configured")
+        st.error("❌ No database file found and no API configured!")
+        st.stop()
         use_server = False
 
     uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"])
