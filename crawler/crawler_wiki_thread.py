@@ -110,9 +110,10 @@ elif low_ram:
 else:
     print("No model file found, running face detection with face_recognition only.")
 
-# Robots.txt parser for Wikipedia
+# Robots.txt parser
 def check_robots_txt(url):
     """Checks if the URL is allowed according to robots.txt."""
+    # Wikipedia and Wikimedia are always allowed
     if "wikipedia.org" in url or "wikimedia.org" in url or "wikipedia" in url:
         return True
     else:
