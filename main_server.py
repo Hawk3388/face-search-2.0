@@ -18,10 +18,10 @@ app.config['JSON_SORT_KEYS'] = False
 
 # Rate limiting
 limiter = Limiter(
-    app,
     key_func=get_remote_address,
     default_limits=["200 per day", "50 per hour", "10 per minute"]
 )
+limiter.init_app(app)
 
 # Global database
 db = None

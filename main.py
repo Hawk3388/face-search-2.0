@@ -9,6 +9,7 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
+
 API_URL = os.getenv("API_URL")
 
 # Load embedding database
@@ -87,8 +88,18 @@ def main():
     # Sidebar for settings
     st.sidebar.header("⚙️ Search Settings")
     
+    # Check API health
+    def check_api_health():
+        if not API_URL:
+            return False
+        try:
+            response = requests.get(f"{API_URL.rstrip('/')}/health", timeout=5)
+            return response.status_code == 200
+        except Exception:
+            return False
+    
     # Check availability
-    api_available = bool(API_URL)
+    api_available = check_api_health()
     local_available = os.path.exists(path)
     
     # Mode selection if both are available
