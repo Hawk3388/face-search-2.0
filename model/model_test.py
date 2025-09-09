@@ -2,6 +2,7 @@ import numpy as np
 import os
 from PIL import Image
 import time
+import face_recognition
 
 model = None
 
@@ -93,6 +94,8 @@ def main():
         print(f"Image file not found: {img_path}")
         return
 
+    start_time = time.time()
+
     try:
         pil_image = Image.open(img_path).convert('RGB')
         np_image = np.array(pil_image)
@@ -107,6 +110,23 @@ def main():
         print("Face detected in image.")
     else:
         print("No face detected in image.")
+    print(f"Total time with model: {time.time() - start_time:.4f} seconds")
+
+    start_time = time.time()
+
+    try:
+        image = face_recognition.load_image_file(img_path)
+    except Exception as e:
+        print(f"Error loading image for face_recognition: {e}")
+        return
+    face_locations = face_recognition.face_locations(image)
+
+    if face_locations:
+        print(f"Face locations found: {face_locations}")
+    else:
+        print("No faces found.")
+
+    print(f"Total time with face_recognition: {time.time() - start_time:.4f} seconds")
 
 if __name__ == "__main__":
     main()

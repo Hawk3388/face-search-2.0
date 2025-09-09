@@ -29,7 +29,6 @@ import sys
 import gc  # For garbage collection
 import time  # For error waiting times
 import urllib.robotparser  # For robots.txt respect
-import concurrent.futures
 import re
 import multiprocessing
 
@@ -114,14 +113,17 @@ else:
 # Robots.txt parser for Wikipedia
 def check_robots_txt(url):
     """Checks if the URL is allowed according to robots.txt."""
-    try:
-        rp = urllib.robotparser.RobotFileParser()
-        rp.set_url(urllib.parse.urljoin(url, '/robots.txt'))
-        rp.read()
-        return rp.can_fetch(USER_AGENT, url)
-    except:
-        # On errors reading robots.txt - allow access
+    if "wikipedia.org" in url or "wikimedia.org" in url or "wikipedia" in url:
         return True
+    else:
+        try:
+            rp = urllib.robotparser.RobotFileParser()
+            rp.set_url(urllib.parse.urljoin(url, '/robots.txt'))
+            rp.read()
+            return rp.can_fetch(USER_AGENT, url)
+        except:
+            # On errors reading robots.txt - allow access
+            return True
 
 queue = deque()  # Global queue for signal handler
 
@@ -440,10 +442,10 @@ def download_image(img_url):
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):
         try:
-            # # Respect robots.txt
-            # if not check_robots_txt(img_url):
-            #     print(f"⚠️ robots.txt forbids access to: {img_url}")
-            #     return None
+            # Respect robots.txt
+            if not check_robots_txt(img_url):
+                print(f"⚠️ robots.txt forbids access to: {img_url}")
+                return None
             
             headers = {
                 "User-Agent": USER_AGENT,
@@ -1235,28 +1237,6 @@ if __name__ == "__main__":
             close_database()
             print("Crawler terminated by user.")
             break
-
-        except OSError as e:
-            if "swap" in str(e).lower() or "read-error" in str(e).lower():
-                print(f"\nSwap error detected: {e}")
-                print("Attempting to continue after memory cleanup...")
-                gc.collect()
-                time.sleep(10)  # Wait for system to recover
-                # Try to continue
-                try:
-                    if cuda:
-                        print("Using CUDA for image processing.")
-                        crawl_images_thread()
-                    else:
-                        print("CUDA not available - using CPU for image processing.")
-                        crawl_images()
-                    continue  # Success, continue main loop
-                except Exception as e2:
-                    print(f"Failed to recover from swap error: {e2}")
-                    save_database()
-                    close_database()
-            else:
-                raise
 
         except Exception as e:
             print(f"\nUnexpected error: {e}")
