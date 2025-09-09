@@ -6,11 +6,15 @@ import numpy as np
 from io import BytesIO
 import requests
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
-
-API_URL = os.getenv("API_URL")
+# Load configuration from Streamlit secrets
+try:
+    API_URL = st.secrets["API_URL"]
+    TOKEN = st.secrets["TOKEN"]
+except KeyError as e:
+    st.error(f"Missing configuration in Streamlit secrets: {e}")
+    API_URL = None
+    TOKEN = None
 
 # Load embedding database
 def load_database(path="face_embeddings.json"):
@@ -51,7 +55,10 @@ def serverless(encodings, db):
 def server(encodings):
     try:
         payload = {"encoding": encodings[0].tolist()}
-        response = requests.post(API_URL, json=payload, timeout=120)
+        headers = {'Content-Type': 'application/json'}
+        if TOKEN:
+            headers['Authorization'] = f'Bearer {TOKEN}'
+        response = requests.post(f"{API_URL}/search", json=payload, headers=headers, timeout=120)
         response.raise_for_status()
         api_response = response.json()
         
@@ -93,7 +100,10 @@ def main():
         if not API_URL:
             return False
         try:
-            response = requests.get(f"{API_URL.rstrip('/')}/health", timeout=5)
+            headers = {}
+            if TOKEN:
+                headers['Authorization'] = f'Bearer {TOKEN}'
+            response = requests.get(f"{API_URL}/health", headers=headers, timeout=5)
             return response.status_code == 200
         except Exception:
             return False
@@ -114,7 +124,6 @@ def main():
         
         if use_server:
             st.sidebar.success("🌐 Using Server Mode")
-            st.sidebar.write(f"API: {API_URL}")
         else:
             st.sidebar.info("💻 Using Local Mode")
             st.sidebar.write(f"Database: {len(db) if 'db' in locals() else 0} entries")
@@ -122,7 +131,6 @@ def main():
     # Single option available
     elif api_available:
         st.sidebar.success("🌐 Server Mode (Only)")
-        st.sidebar.write(f"API: {API_URL}")
         use_server = True
     elif local_available:
         st.sidebar.info("💻 Local Mode (Only)")

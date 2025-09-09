@@ -16,6 +16,26 @@ load_dotenv()
 app = Flask(__name__)
 app.config['JSON_SORT_KEYS'] = False
 
+# Get authentication token from environment
+AUTH_TOKEN = os.getenv('TOKEN')
+if not AUTH_TOKEN:
+    print("⚠️ WARNING: No TOKEN found in environment variables. Server will be publicly accessible!")
+
+def verify_token():
+    """Verify authentication token from request headers"""
+    if not AUTH_TOKEN:
+        return True  # If no token is configured, allow access
+    
+    token = request.headers.get('Authorization')
+    if not token:
+        return False
+    
+    # Remove "Bearer " prefix if present
+    if token.startswith('Bearer '):
+        token = token[7:]
+    
+    return token == AUTH_TOKEN
+
 # Rate limiting
 limiter = Limiter(
     key_func=get_remote_address,
@@ -125,6 +145,10 @@ def find_matches(query_embedding, db, tolerance=0.5):
 def search_faces():
     """Search for similar faces using face encoding"""
     try:
+        # Verify authentication
+        if not verify_token():
+            return jsonify({'error': 'Unauthorized: Invalid or missing token'}), 401
+        
         # Increment request counter
         increment_request_count()
         
@@ -166,6 +190,10 @@ def health_check():
 @app.route('/stats', methods=['GET'])
 def get_stats():
     """Get database and request statistics"""
+    # Verify authentication for stats endpoint
+    if not verify_token():
+        return jsonify({'error': 'Unauthorized: Invalid or missing token'}), 401
+        
     return jsonify({
         'total_entries': len(db) if db else 0,
         'database_file_size': os.path.getsize('face_embeddings_server.json') if os.path.exists('face_embeddings_server.json') else 0,
@@ -188,6 +216,10 @@ if __name__ == '__main__':
     
     print(f"🚀 Starting Face Search API on port {port}")
     print(f"📊 Database entries: {len(db) if db else 0}")
-    print(f"🌐 API is now publicly accessible (no authentication required)")
+    
+    if AUTH_TOKEN:
+        print(f"🔒 API is secured with token authentication")
+    else:
+        print(f"⚠️ API is publicly accessible (no token configured)")
     
     app.run(host='0.0.0.0', port=port, debug=debug)
