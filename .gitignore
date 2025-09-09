@@ -10,3 +10,4 @@ __pycache__/
 wider/
 *.pth
 .env*
+föhn_ideen.txt

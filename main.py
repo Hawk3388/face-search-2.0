@@ -1,7 +1,7 @@
 import streamlit as st
 import face_recognition
 import json
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 from io import BytesIO
 import requests
@@ -36,6 +36,25 @@ def find_matches(query_embedding, db, tolerance=0.5):
     matches.sort(key=lambda x: x[1])  # sort by similarity
     return matches
 
+def draw_face_boxes(image, face_locations):
+    """Draw boxes around detected faces"""
+    pil_image = Image.fromarray(image) if isinstance(image, np.ndarray) else image
+    draw = ImageDraw.Draw(pil_image)
+    
+    for i, (top, right, bottom, left) in enumerate(face_locations):
+        # Draw rectangle around face
+        draw.rectangle([(left, top), (right, bottom)], outline="red", width=3)
+        
+        # Add face number
+        try:
+            font = ImageFont.truetype("arial.ttf", 20)
+        except:
+            font = ImageFont.load_default()
+        
+        draw.text((left, top - 25), f"Face {i+1}", fill="red", font=font)
+    
+    return pil_image
+
 def serverless(encodings, db):
     results = find_matches(encodings[0], db)
 
@@ -46,18 +65,19 @@ def serverless(encodings, db):
         for entry, dist in results[:10]:  # show top 10
             st.markdown(f"**Similarity**: {dist:.4f}")
             st.markdown(f"[View image]({entry['image_url']})  \n[Visit page]({entry['page_url']})")
+            # Always try to show image, show placeholder if failed
             try:
                 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-                response = requests.get(entry['image_url'], timeout=60, headers=headers)
+                response = requests.get(entry['image_url'], timeout=30, headers=headers)
                 response.raise_for_status()
                 img_bytes = response.content
                 st.image(Image.open(BytesIO(img_bytes)), width=250)
-            except requests.exceptions.Timeout:
-                st.warning("⏰ Image loading timeout (>60s)")
-            except requests.exceptions.RequestException as e:
-                st.warning(f"🌐 Network error loading image: {str(e)[:50]}...")
-            except Exception as e:
-                st.warning(f"🖼️ Image processing error: {str(e)[:50]}...")
+            except Exception:
+                # Show placeholder image with error message
+                placeholder_img = Image.new('RGB', (250, 200), color='lightgray')
+                draw = ImageDraw.Draw(placeholder_img)
+                draw.text((10, 90), "Image not\navailable", fill='darkgray')
+                st.image(placeholder_img, width=250)
 
 def server(encodings):
     try:
@@ -93,19 +113,20 @@ def server(encodings):
                         st.warning("Unknown response format from server")
                         continue
                         
+                    # Always try to show image, show placeholder if failed
                     try:
                         USER_AGENT = "FaceSearchBot/1.0 (Educational Research; Contact: github.com/Hawk3388/face-search-2.0)"
                         headers = {'User-Agent': USER_AGENT}
-                        response = requests.get(img_url, timeout=60, headers=headers)
+                        response = requests.get(img_url, timeout=30, headers=headers)
                         response.raise_for_status()
                         img_bytes = response.content
                         st.image(Image.open(BytesIO(img_bytes)), width=250)
-                    except requests.exceptions.Timeout:
-                        st.warning("⏰ Image loading timeout (>60s)")
-                    except requests.exceptions.RequestException as e:
-                        st.warning(f"🌐 Network error loading image: {str(e)[:50]}...")
-                    except Exception as e:
-                        st.warning(f"🖼️ Image processing error: {str(e)[:50]}...")
+                    except Exception:
+                        # Show placeholder image with error message
+                        placeholder_img = Image.new('RGB', (250, 200), color='lightgray')
+                        draw = ImageDraw.Draw(placeholder_img)
+                        draw.text((10, 90), "Image not\navailable", fill='darkgray')
+                        st.image(placeholder_img, width=250)
         else:
             st.error(f"API Error: {api_response.get('error', 'Unknown error')}")
     except Exception as e:
@@ -166,22 +187,51 @@ def main():
         else:
             image = face_recognition.load_image_file(uploaded_file)
 
-        encodings = face_recognition.face_encodings(image, model="large", num_jitters=10)
+        # Detect faces and get locations
+        face_locations = face_recognition.face_locations(image, model="hog")
+        encodings = face_recognition.face_encodings(image, face_locations, model="large", num_jitters=10)
+
+        # Always show image with face detection boxes
+        if face_locations:
+            image_with_boxes = draw_face_boxes(image, face_locations)
+            st.image(image_with_boxes, caption=f"Uploaded image - {len(face_locations)} face(s) detected", use_container_width=True)
+        else:
+            st.image(uploaded_file, caption="Uploaded image - No faces detected", use_container_width=True)
 
         if not encodings:
             st.warning("❌ No face detected in the image.")
         else:
-            st.image(uploaded_file, caption="Uploaded image", use_container_width=True)
-            
-            # Use selected mode
-            if use_server and api_available:
-                st.info("🔎 Searching for similar faces (Server Mode)...")
-                server(encodings)
-            elif not use_server and local_available:
-                st.info("🔎 Searching for similar faces (Local Mode)...")
-                serverless(encodings, db)
+            # Handle multiple faces
+            if len(encodings) > 1:
+                st.info(f"🔍 Found {len(encodings)} faces in the image. Select which face to search for:")
+                
+                cols = st.columns(len(encodings))
+                selected_face = None
+                
+                for i, encoding in enumerate(encodings):
+                    with cols[i]:
+                        if st.button(f"Search Face {i+1}", key=f"face_{i}"):
+                            selected_face = i
+                
+                if selected_face is not None:
+                    st.info(f"🔎 Searching for Face {selected_face + 1}...")
+                    # Use selected mode
+                    if use_server and 'api_available' in locals() and api_available:
+                        server([encodings[selected_face]])
+                    elif not use_server and local_available:
+                        serverless([encodings[selected_face]], db)
+                    else:
+                        st.error("❌ Selected mode not available!")
             else:
-                st.error("❌ Selected mode not available!")
+                # Single face - search automatically
+                st.info("🔎 Searching for similar faces...")
+                # Use selected mode
+                if use_server and 'api_available' in locals() and api_available:
+                    server(encodings)
+                elif not use_server and local_available:
+                    serverless(encodings, db)
+                else:
+                    st.error("❌ Selected mode not available!")
 
 if __name__ == "__main__":
     main()
