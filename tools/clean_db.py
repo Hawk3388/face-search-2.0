@@ -35,113 +35,89 @@ def create_backup(original_file):
         print(f"❌ Error creating backup: {e}")
         return None
 
-def find_hash_duplicates(database, hash_threshold=5):
+def find_exact_duplicates(database):
     """
-    Finds duplicates based on phash comparison (ultra-optimized version with LSH)
+    Finds exact duplicates: first by hash (exact match), then by encoding if hash matches
+    Uses the same logic as the crawler for consistency
     
     Args:
         database: List of database entries
-        hash_threshold: Maximum Hamming distance for phash comparison (default: 5)
     
     Returns:
-        List of duplicate groups, where each group is a list of similar entries
+        List of duplicate groups, where each group is a list of exact duplicates
     """
-    print(f"🔍 Searching for duplicates with hash threshold: {hash_threshold}")
+    import numpy as np
     
-    # Collect all valid hashes with their indices
-    print("📋 Loading and validating hashes...")
+    print(f"🔍 Searching for exact duplicates (hash = 0, then encoding <= 0.05)")
+    
+    # Collect all valid entries with hashes and encodings
+    print("📋 Loading and validating data...")
     valid_entries = []
     for i, entry in enumerate(database):
         phash = str_to_phash(entry.get("phash", ""))
-        if phash is not None:
-            # Convert hash to integer for faster comparisons
-            hash_int = int(str(phash), 16)
+        embedding = entry.get("embedding")
+        if phash is not None and embedding is not None:
             valid_entries.append({
                 "index": i,
                 "entry": entry,
                 "phash": phash,
-                "hash_int": hash_int
+                "embedding": np.array(embedding)
             })
     
-    print(f"✅ {len(valid_entries)} of {len(database)} entries have valid hashes")
+    print(f"✅ {len(valid_entries)} of {len(database)} entries have valid hashes and embeddings")
     
     if len(valid_entries) < 2:
-        print("❌ Not enough valid hashes for comparison")
+        print("❌ Not enough valid entries for comparison")
         return []
     
-    print("🚀 Using bucket-based optimization...")
-    
-    # Bucket-based pre-sorting for massive speedup
-    # Group hashes by their first 16 bits (65536 buckets)
-    buckets = defaultdict(list)
-    for entry in valid_entries:
-        bucket_key = entry["hash_int"] >> 48  # First 16 bits
-        buckets[bucket_key].append(entry)
+    print("🚀 Comparing entries for exact duplicates...")
     
     duplicate_groups = []
-    processed_global = set()
+    processed_indices = set()
     total_comparisons = 0
+    hash_matches = 0
+    encoding_matches = 0
     
-    print("🔄 Processing buckets...")
-    bucket_count = 0
-    for bucket_key, bucket_entries in buckets.items():
-        bucket_count += 1
-        if bucket_count % 1000 == 0:
-            print(f"Bucket progress: {bucket_count}/{len(buckets)}")
-        
-        if len(bucket_entries) < 2:
+    for i, entry1 in enumerate(valid_entries):
+        if entry1["index"] in processed_indices:
             continue
+            
+        current_group = [entry1]
+        processed_indices.add(entry1["index"])
         
-        # Only compare within bucket + adjacent buckets for edge cases
-        candidates = bucket_entries.copy()
-        
-        # Add similar buckets (for hashes near bucket boundary)
-        for offset in [-1, 1]:
-            neighbor_key = bucket_key + offset
-            if neighbor_key in buckets:
-                candidates.extend(buckets[neighbor_key])
-        
-        # Dedupliziere candidates
-        seen_indices = set()
-        unique_candidates = []
-        for entry in candidates:
-            if entry["index"] not in seen_indices:
-                unique_candidates.append(entry)
-                seen_indices.add(entry["index"])
-        
-        # Schnelle Vergleiche innerhalb der Kandidaten
-        processed_local = set()
-        for i, entry1 in enumerate(unique_candidates):
-            if entry1["index"] in processed_global or i in processed_local:
+        for j in range(i + 1, len(valid_entries)):
+            entry2 = valid_entries[j]
+            if entry2["index"] in processed_indices:
                 continue
                 
-            current_group = [entry1]
-            processed_local.add(i)
-            processed_global.add(entry1["index"])
+            total_comparisons += 1
             
-            for j in range(i + 1, len(unique_candidates)):
-                if j in processed_local:
-                    continue
-                    
-                entry2 = unique_candidates[j]
-                if entry2["index"] in processed_global:
-                    continue
+            # First check: exact hash match
+            hash_distance = entry1["phash"] - entry2["phash"]
+            if hash_distance == 0:  # Exact hash match
+                hash_matches += 1
                 
-                # Ultra-schneller Bit-XOR Vergleich
-                xor_result = entry1["hash_int"] ^ entry2["hash_int"]
-                distance = bin(xor_result).count('1')  # Hamming-Distanz
-                total_comparisons += 1
-                
-                if distance <= hash_threshold:
+                # Second check: encoding similarity for exact duplicates
+                embedding_distance = np.linalg.norm(entry1["embedding"] - entry2["embedding"])
+                if embedding_distance <= 0.05:  # Very strict threshold for exact duplicates
+                    encoding_matches += 1
                     current_group.append(entry2)
-                    processed_local.add(j)
-                    processed_global.add(entry2["index"])
-            
-            if len(current_group) > 1:
-                duplicate_groups.append(current_group)
+                    processed_indices.add(entry2["index"])
+        
+        if len(current_group) > 1:
+            duplicate_groups.append(current_group)
+        
+        # Progress indicator
+        if (i + 1) % 1000 == 0:
+            print(f"Progress: {i+1}/{len(valid_entries)} entries processed")
     
-    print(f"✅ Fertig! {len(duplicate_groups)} Duplikat-Gruppen gefunden")
-    print(f"🚀 Nur {total_comparisons:,} Vergleiche statt {len(valid_entries)*(len(valid_entries)-1)//2:,} (Speedup: {(len(valid_entries)*(len(valid_entries)-1)//2)/max(total_comparisons,1):.1f}x)")
+    print(f"✅ Finished! {len(duplicate_groups)} exact duplicate groups found")
+    print(f"📊 Statistics:")
+    print(f"   - Total comparisons: {total_comparisons:,}")
+    print(f"   - Hash matches (exact): {hash_matches}")
+    print(f"   - Encoding matches (≤0.05): {encoding_matches}")
+    print(f"   - Final duplicates: {sum(len(group) for group in duplicate_groups)}")
+    
     return duplicate_groups
 
 def analyze_duplicates(duplicate_groups):
@@ -230,17 +206,9 @@ def interactive_duplicate_removal():
     """Interaktiver Modus zur Duplikat-Entfernung"""
     print("🤖 INTERAKTIVE DUPLIKAT-BEREINIGUNG")
     print("=" * 50)
-    
-    # Schwellenwert abfragen
-    while True:
-        try:
-            threshold = int(input("Hash-Schwellenwert (0-64, empfohlen: 5): "))
-            if 0 <= threshold <= 64:
-                break
-            else:
-                print("Bitte einen Wert zwischen 0 und 64 eingeben.")
-        except ValueError:
-            print("Bitte eine gültige Zahl eingeben.")
+    print("ℹ️ Hinweis: Das Tool sucht jetzt nach exakten Duplikaten")
+    print("   - Hash: Exakte Übereinstimmung (Hamming-Distanz = 0)")
+    print("   - Encoding: Sehr ähnlich (Distanz ≤ 0.05)")
     
     # Strategie abfragen
     while True:
@@ -249,7 +217,7 @@ def interactive_duplicate_removal():
             break
         print("Bitte 'first' oder 'last' eingeben.")
     
-    return threshold, strategy
+    return None, strategy  # threshold wird nicht mehr verwendet
 
 def main():
     """Hauptfunktion"""
@@ -278,13 +246,13 @@ def main():
     
     if use_interactive:
         threshold, strategy = interactive_duplicate_removal()
+        print("⚠️ Hinweis: Bei exakter Duplikatsuche wird der Schwellenwert ignoriert")
     else:
-        threshold = 5
         strategy = "first"
-        print(f"🔧 Standard-Einstellungen: Schwellenwert={threshold}, Strategie={strategy}")
+        print(f"🔧 Standard-Einstellungen: Exakte Duplikate, Strategie={strategy}")
     
-    # Duplikate finden
-    duplicate_groups = find_hash_duplicates(database, threshold)
+    # Duplikate finden (jetzt mit exakter Suche)
+    duplicate_groups = find_exact_duplicates(database)
     
     if not duplicate_groups:
         print("🎉 Keine Duplikate gefunden! Datenbank ist bereits sauber.")
