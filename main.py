@@ -42,16 +42,30 @@ def draw_face_boxes(image, face_locations):
     draw = ImageDraw.Draw(pil_image)
     
     for i, (top, right, bottom, left) in enumerate(face_locations):
+        # Calculate face box dimensions
+        face_height = bottom - top
+        face_width = right - left
+        
+        # Dynamic font size: 1/4 of the smaller dimension (height or width)
+        font_size = max(12, min(face_height, face_width) // 4)  # Minimum 12px font
+        
         # Draw rectangle around face
         draw.rectangle([(left, top), (right, bottom)], outline="red", width=3)
         
-        # Add face number
+        # Add face number with dynamic font size
         try:
-            font = ImageFont.truetype("arial.ttf", 20)
+            font = ImageFont.truetype("arial.ttf", font_size)
         except:
-            font = ImageFont.load_default()
+            try:
+                font = ImageFont.load_default()
+                # Try to scale default font if possible
+                font = font.font_variant(size=font_size)
+            except:
+                font = ImageFont.load_default()
         
-        draw.text((left, top - 25), f"Face {i+1}", fill="red", font=font)
+        # Position text above the face box
+        text_y = max(0, top - font_size - 5)  # 5px padding, don't go above image
+        draw.text((left, text_y), f"Face {i+1}", fill="red", font=font)
     
     return pil_image
 
