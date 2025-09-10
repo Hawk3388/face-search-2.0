@@ -566,16 +566,11 @@ def process_image(image, image_bytes, img_url, page_url):
         if encodings:
             phash = get_phash(image_bytes)
             
-            # Check for duplicate image first (by hash)
-            if is_duplicate_by_hash(phash):
-                print(f"Duplicate image detected by hash: {img_url}")
-                return
-            
             faces_added = 0
             # Process each face separately
             for i, encoding in enumerate(encodings):
-                # Check if this specific face encoding is a duplicate
-                if not is_duplicate_by_encoding(encoding.tolist()):
+                # Check if this specific face is a duplicate (hash first, then encoding if needed)
+                if not is_duplicate_image_and_face(phash, encoding.tolist()):
                     entry = {
                         "image_url": img_url,
                         "page_url": page_url,
@@ -587,7 +582,7 @@ def process_image(image, image_bytes, img_url, page_url):
                     current_article_data.append(entry)
                     faces_added += 1
                 else:
-                    print(f"Duplicate face encoding detected in {img_url} (face {i+1})")
+                    print(f"Duplicate detected in {img_url} (face {i+1})")
             
             if faces_added > 0:
                 print(f"{faces_added} face(s) added from {img_url} (total faces detected: {len(encodings)})")
@@ -645,52 +640,47 @@ def compare_hashes(phash):
             return True
     return False
 
-def is_duplicate_by_hash(phash):
-    """Check if image hash already exists in processed images."""
-    phash_str = str(phash)
-    
-    # Check in current article data
-    for entry in current_article_data:
-        existing_phash = str_to_phash(entry["phash"])
-        if existing_phash and existing_phash - phash < 5:
-            return True
-    
-    # Check in global processed hashes (for session-wide duplicate detection)
-    for existing_hash_str in processed_hashes:
-        existing_phash = str_to_phash(existing_hash_str)
-        if existing_phash and existing_phash - phash < 5:
-            return True
-    
-    # Add to processed hashes
-    processed_hashes.add(phash_str)
-    return False
-
-def is_duplicate_by_encoding(encoding):
-    """Check if face encoding is too similar to already processed faces."""
+def is_duplicate_image_and_face(phash, encoding):
+    """Check if image/face is duplicate: first hash, then encoding only if hash matches exactly."""
     import numpy as np
     
+    phash_str = str(phash)
     query_embedding = np.array(encoding)
     
     # Check in current article data
     for entry in current_article_data:
-        db_embedding = np.array(entry["embedding"])
-        distance = np.linalg.norm(query_embedding - db_embedding)
-        if distance <= 0.3:  # Stricter threshold for duplicates
-            return True
+        existing_phash = str_to_phash(entry["phash"])
+        if existing_phash and existing_phash - phash == 0:  # Exact hash match
+            # Hash is identical - now check encoding for exact duplicate
+            db_embedding = np.array(entry["embedding"])
+            distance = np.linalg.norm(query_embedding - db_embedding)
+            if distance <= 0.05:  # Very strict threshold for exact duplicates
+                return True
     
-    # Check in global processed encodings (limited to last 1000 for memory)
-    for existing_encoding in processed_encodings[-1000:]:  # Only check last 1000 encodings
-        db_embedding = np.array(existing_encoding)
-        distance = np.linalg.norm(query_embedding - db_embedding)
-        if distance <= 0.3:  # Stricter threshold for duplicates
-            return True
+    # Check in global processed data (limited to last 1000 for memory)
+    for i, existing_hash_str in enumerate(list(processed_hashes)[-1000:]):
+        existing_phash = str_to_phash(existing_hash_str)
+        if existing_phash and existing_phash - phash == 0:  # Exact hash match
+            # Hash is identical - check corresponding encoding if available
+            if i < len(processed_encodings):
+                db_embedding = np.array(processed_encodings[i])
+                distance = np.linalg.norm(query_embedding - db_embedding)
+                if distance <= 0.05:  # Very strict threshold for exact duplicates
+                    return True
     
-    # Add to processed encodings
+    # Not a duplicate - add to processed data
+    processed_hashes.add(phash_str)
     processed_encodings.append(encoding)
     
-    # Keep only last 1000 encodings to prevent memory issues
+    # Keep only last 1000 entries to prevent memory issues
     if len(processed_encodings) > 1000:
         processed_encodings.pop(0)
+        # Also clean up hashes to match
+        if len(processed_hashes) > 1000:
+            # Convert to list, remove first item, convert back to set
+            hash_list = list(processed_hashes)
+            hash_list.pop(0)
+            processed_hashes = set(hash_list)
     
     return False
 
