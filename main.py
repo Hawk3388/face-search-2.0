@@ -175,7 +175,7 @@ def main():
         api_available = check_api_health()
         if api_available:
             use_server = True
-            st.info("🌐 Using API server")
+            st.info("🌐 Using API server (all uploaded images are deleted immediately after usage)")
         else:
             st.error("❌ No local database found and API server is not reachable!")
             use_server = False

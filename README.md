@@ -29,7 +29,7 @@ Search for similar faces in a large database! Upload an image and find people wh
 ### Use Online (Recommended)
 
 1. Go to [face-search.streamlit.app](https://face-search.streamlit.app)
-2. Upload an image with a face
+2. Upload an image with a face (all uploaded images are deleted immediately after usage)
 3. Wait for automatic face detection
 4. Click "Start Search"
 5. Look at the similar faces!
@@ -83,6 +83,8 @@ The app uses a database with thousands of faces from public sources (mainly Wiki
 - **Quality Control** - Only clear, well-recognizable faces are stored
 - **Customizable** in the `crawler` folder you can see some examples to create your own database
 
+**Note:** The database may not be complete, due to the changing of the category and the early stage of the project.
+
 ## 🤖 Custom Trained Model
 
 This project uses a **custom trained face recognition model** that has been specifically trained for better accuracy with diverse face types and lighting conditions.
@@ -134,4 +136,4 @@ This project is licensed under the Apache License 2.0.
 
 ---
 
-**Made by Hawk3388** | **Wiki-crawler active since September 11, 2025**
+**Made by Hawk3388** | **Crawler active since September 11, 2025**
