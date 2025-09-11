@@ -170,10 +170,7 @@ def main():
     # Determine mode automatically
     local_available = os.path.exists(path)
     
-    if local_available:
-        use_server = False
-        st.info(f"💻 Using local database ({len(db) if 'db' in locals() else 0} entries)")
-    elif API_URL and TOKEN:
+    if API_URL and TOKEN:
         # Only check API health if no local DB is available
         api_available = check_api_health()
         if api_available:
@@ -181,8 +178,10 @@ def main():
             st.info("🌐 Using API server")
         else:
             st.error("❌ No local database found and API server is not reachable!")
-            st.stop()
             use_server = False
+    elif local_available:
+        use_server = False
+        st.info(f"💻 Using local database ({len(db) if 'db' in locals() else 0} entries)")
     else:
         st.error("❌ No database file found and no API configured!")
         st.stop()
