@@ -1,206 +1,137 @@
-# Face Search 2.0 🔍👤
+# Face Search 🔍👤
 
-An advanced face recognition system that crawls websites (primarily Wikipedia) to build a database of face embeddings and provides a web interface for searching similar faces.
+**🚀 Live App:** [face-search.streamlit.app](https://face-search.streamlit.app)
 
-## Features ✨
+Search for similar faces in a large database! Upload an image and find people who look alike.
 
-- **Multi-Source Web Crawling**: Specialized crawlers for Wikipedia, general URLs, and Common Crawl data
-- **Advanced Face Recognition**: Uses dlib's state-of-the-art face recognition with 128-dimensional embeddings
-- **Duplicate Detection**: Implements perceptual hashing (pHash) to identify and remove duplicate images
-- **Interactive Search Interface**: Streamlit-based web app for uploading images and finding similar faces
-- **Ethical Crawling**: Respects robots.txt, implements rate limiting, and follows best practices
-- **Resume Functionality**: Continue crawling from where you left off after interruptions
-- **Automatic Backups**: Periodic database backups to prevent data loss
-- **Database Management**: Tools for cleaning and deduplicating the face database
+## ✨ What the App Can Do
 
-## How It Works 🔧
+### 🎯 Face Recognition
 
-1. **Web Crawling**: Automatically crawls websites (primarily Wikipedia) to collect face images
-2. **Face Detection**: Locates faces in images using dlib
-3. **Feature Extraction**: Generates 128-dimensional face embeddings for each detected face
-4. **Duplicate Removal**: Uses perceptual hashing to identify and remove duplicate images
-5. **Database Storage**: Saves embeddings with metadata to JSON database
-6. **Face Search**: Upload an image to find similar faces using Euclidean distance matching
+- **Automatic Face Detection** - Finds all faces in your image
+- **Multiple Faces** - If there are multiple people in the image, you can choose which one to search for
+- **Smart Labeling** - Faces are marked with red boxes and labels
 
-## Installation 📦
+### 🔍 Face Search
 
-Clone this repository:
+- **Instant Results** - See similar faces in seconds
+- **Similarity Score** - Shows how similar the found faces are
+- **Image Gallery** - Shows the found faces as previews
+
+### 🛡️ Security & Privacy
+
+- **Secure Connection** - All data is transmitted encrypted
+- **Local Mode** - You can also run the app offline on your computer
+- **No Storage** - Your uploaded images are not stored
+
+## 🚀 Quick Start
+
+### Use Online (Recommended)
+
+1. Go to [face-search.streamlit.app](https://face-search.streamlit.app)
+2. Upload an image with a face
+3. Wait for automatic face detection
+4. Click "Start Search"
+5. Look at the similar faces!
+
+### Install Locally
 
 ```bash
-git clone https://github.com/yourusername/face-search-2.0.git
+# Download repository
+git clone https://github.com/Hawk3388/face-search-2.0.git
 cd face-search-2.0
-```
 
-Install all requirements:
-
-```bash
+# Install dependencies
 pip install -r requirements.txt
-```
 
-## Usage 🚀
-
-### Web Interface
-
-Launch the face search web application:
-
-```bash
+# Start app
 streamlit run main.py
 ```
 
-Navigate to `http://localhost:8501` and upload an image to search for similar faces in the database.
+## 📸 Supported Formats
 
-### Building the Database
+- JPG, JPEG, PNG, WebP
 
-#### Wikipedia Crawler (Recommended)
+## 🎮 How It Works
 
-Crawls Wikipedia's "Living People" category:
+### Step 1: Upload Image
 
-```bash
-python crawler_wiki.py
-```
+Upload a photo that shows at least one face.
 
-#### General Website Crawler
+### Step 2: Face Detection
 
-Crawl any website for face images:
+The app automatically detects all faces in the image and marks them with red boxes.
 
-```bash
-python crawler_url.py
-```
+### Step 3: Select Face (if multiple)
 
-#### Common Crawl Crawler
+If multiple faces are found, you can choose which one to search for.
 
-Use archived web data from Common Crawl:
+### Step 4: Start Search
 
-```bash
-python common_crawler.py
-```
+The app searches the database for similar faces.
 
-### Database Management
+### Step 5: View Results
 
-#### Clean Duplicates
+You see all found similar faces with similarity scores.
 
-Remove duplicate images using perceptual hashing:
+## 🏗️ Technical Database
 
-```bash
-python clean_db.py
-```
+The app uses a database with thousands of faces from public sources (mainly Wikipedia). The database for the web app contains **only living people** and is **updated daily** through:
 
-#### Performance Testing
+- **Automatic Crawling** - Searches for new faces on the internet
+- **Duplicate Check** - Prevents duplicate entries
+- **Quality Control** - Only clear, well-recognizable faces are stored
+- **Customizable** in the `crawler` folder you can see some examples to create your own database
 
-Benchmark duplicate detection performance:
+## 🤖 Custom Trained Model
 
-```bash
-python benchmark_hash.py
-```
+This project uses a **custom trained face recognition model** that has been specifically trained for better accuracy with diverse face types and lighting conditions.
 
-## Supported Image Formats 📸
+### Download Pre-trained Model
 
-- `.jpg`, `.jpeg`
-- `.png`
-- `.webp`
-- `.gif`
-- `.bmp`
-- `.tiff`
+You can download the latest pre-trained model from the [GitHub Releases](https://github.com/Hawk3388/face-search-2.0/releases):
 
-## Technical Details 🔬
+1. Go to the Releases page
+2. Download the latest model file (`tinyfacenet_best.pth`)
+3. Copy the downloaded file to the project root directory
+4. The app will automatically use the custom model for better face recognition (PyTorch is required for this process)
 
-### Dependencies
+### Model Benefits
 
-- **Python 3.8+**: Required for all libraries
-- **face_recognition**: Face detection and encoding
-- **Streamlit**: Web interface
-- **PIL/Pillow**: Image processing
-- **requests**: Web crawling
-- **imagehash**: Perceptual hashing for duplicates
+- **Higher Accuracy** - Better recognition of diverse faces
+- **Optimized Performance** - Faster processing while maintaining quality (GPU recommended for best speed)
+- **Regular Updates** - New model versions released with improvements
+- **CPU Compatible** - Works on CPU but may be slower than GPU version
 
-### Database Format
+**Note:** For optimal performance, use a GPU. The model will run on CPU but processing may be slower.
 
-The face database stores entries in this format:
+## ⚠️ Important Notes
 
-```json
-[
-  {
-    "image_url": "https://example.com/image.jpg",
-    "page_url": "https://example.com/person",
-    "embedding": [0.1, -0.2, 0.3, ...],
-    "phash": "a1b2c3d4e5f6g7h8"
-  }
-]
-```
+### Privacy
 
-### Algorithm Overview
+- Only use images of people who have consented
+- Respect the privacy of others
+- The app is intended for education and research only
 
-- **Face Recognition**: Uses dlib's 128-dimensional face encodings
-- **Similarity Matching**: Euclidean distance comparison with configurable tolerance
-- **Duplicate Detection**: Perceptual hashing with configurable thresholds
+## 🤝 Contribute
 
-## Privacy & Ethics ⚠️
+Have ideas for improvement? Great!
 
-This tool is designed for legitimate research and educational purposes. Please:
+1. Create an issue on GitHub
+2. Describe your idea or the problem
+3. We'll look at it together
 
-- Respect privacy and obtain proper consent when searching for people
-- Follow applicable laws and regulations in your jurisdiction
-- Use responsibly and ethically
-- Only use publicly available images
-- Be aware that results may include false positives
+## 📄 License
 
-The project implements responsible web crawling:
+This project is licensed under the Apache License 2.0.
 
-- **Robots.txt Compliance**: Checks and respects robots.txt files
-- **Rate Limiting**: 1-second delays between requests
-- **User-Agent**: Proper bot identification
-- **Educational Purpose**: Designed for research and learning
+## 🙏 Thanks to
 
-## Project Structure 📁
+- **face_recognition** - For face recognition
+- **Streamlit** - For the simple web app
+- **Wikipedia Community** - For the public data
+- **PyTorch** - For the custom trained model
 
-```sh
-face-search-2.0/
-├── main.py                 # Streamlit web interface
-├── crawler_wiki.py         # Wikipedia "Living People" crawler
-├── crawler_url.py          # General website crawler
-├── common_crawler.py       # Common Crawl data crawler
-├── clean_db.py            # Database cleaning and deduplication
-├── benchmark_hash.py      # Performance testing for duplicate detection
-├── face_embeddings.json   # Main face database
-├── requirements.txt       # Python dependencies
-├── README.md              # This file
-└── images/               # Sample images for testing
-```
+---
 
-## Configuration ⚙️
-
-### Crawler Settings
-
-- `CRAWL_DELAY = 1.0`: Delay between requests (seconds)
-- `MAX_CONSECUTIVE_429 = 10`: Stop after consecutive rate limit errors
-- `model="large"`: Use high-accuracy face recognition model
-
-### Duplicate Detection
-
-- `threshold=5`: Similarity threshold for perceptual hashing (0-64)
-- `strategy="first"`: Which duplicate to keep ("first" or "last")
-
-## Contributing 🤝
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-## Use of AI
-
-This project was built with AI assistance, including code generation and parts of this README file.
-
-## License 📄
-
-This project is licensed under the Apache License 2.0. See the LICENSE file for details.
-
-## Credits 🙏
-
-- **face_recognition**: Adam Geitgey's face recognition library
-- **dlib**: Machine learning library for face detection
-- **Streamlit**: Web app framework
-- **Pillow**: Python Imaging Library
+**Made by Hawk3388** | **Wiki-crawler active since September 11, 2025**
