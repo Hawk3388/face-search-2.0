@@ -173,6 +173,9 @@ def save_database():
         
         print(f"{entries_added} new entries added to database. (Total: {total_entries_saved})")
         
+        # Add new entries to database cache
+        database_cache.extend(current_article_data)
+        
         # Clear current article data after saving
         current_article_data.clear()
     except Exception as e:
@@ -563,6 +566,9 @@ def process_image(image, image_bytes, img_url, page_url):
         face_locations = face_recognition.face_locations(image, model="hog")
         encodings = face_recognition.face_encodings(image, face_locations, model="large")
         
+        print(f"🔍 Processing image: {img_url}")
+        print(f"📍 Found {len(face_locations)} face locations, {len(encodings)} encodings")
+        
         if encodings:
             phash = get_phash(image_bytes)
             
@@ -575,19 +581,24 @@ def process_image(image, image_bytes, img_url, page_url):
                         "image_url": img_url,
                         "page_url": page_url,
                         "embedding": encoding.tolist(),
-                        "phash": str(phash),
-                        "face_index": i  # Track which face in the image this is
+                        "phash": str(phash)
                     }
                     # Add to current article data (memory-efficient)
                     current_article_data.append(entry)
                     faces_added += 1
+                    print(f"✅ Face {i+1} added to database (total in current session: {len(current_article_data)})")
                 else:
-                    print(f"Duplicate detected in {img_url} (face {i+1})")
+                    print(f"❌ Duplicate detected in {img_url} (face {i+1})")
             
             if faces_added > 0:
-                print(f"{faces_added} face(s) added from {img_url} (total faces detected: {len(encodings)})")
+                print(f"🎯 {faces_added} face(s) added from {img_url} (total faces detected: {len(encodings)})")
+                # Save immediately after adding faces
+                save_database()
+                print(f"💾 Database saved after processing {img_url}")
             else:
-                print(f"All faces in {img_url} were duplicates")
+                print(f"🚫 All faces in {img_url} were duplicates or invalid (detected: {len(encodings)})")
+        else:
+            print(f"🚫 No faces detected in {img_url}")
                 
     except Exception as e:
         print(f"Error processing image {img_url}: {e}")
@@ -627,9 +638,26 @@ def str_to_phash(phash_str):
         print(f"Error converting phash: {e}")
         return None
 
-# Global sets for duplicate detection across all processed images
-processed_hashes = set()
+# Global list for duplicate detection across all processed images
 processed_encodings = []
+
+# Global database cache - loaded once at startup
+database_cache = []
+
+def load_database_cache():
+    """Load the entire database once at startup"""
+    global database_cache
+    try:
+        if os.path.exists("face_embeddings.json"):
+            with open("face_embeddings.json", "r") as f:
+                database_cache = json.load(f)
+                print(f"Database loaded: {len(database_cache)} entries")
+        else:
+            database_cache = []
+            print("No existing database found")
+    except Exception as e:
+        print(f"Error loading database: {e}")
+        database_cache = []
 
 def compare_hashes(phash):
     """Da wir keine Datei lesen - immer False (keine Duplikate erkennen)."""
@@ -641,46 +669,21 @@ def compare_hashes(phash):
     return False
 
 def is_duplicate_image_and_face(phash, encoding):
-    """Check if image/face is duplicate: first hash, then encoding only if hash matches exactly."""
-    import numpy as np
-    
+    """Check if image/face is exact duplicate by comparing against entire database."""
     phash_str = str(phash)
-    query_embedding = np.array(encoding)
+    query_embedding = encoding  # Keep as list for exact comparison
     
-    # Check in current article data
+    # Check in current article data for exact duplicates
     for entry in current_article_data:
-        existing_phash = str_to_phash(entry["phash"])
-        if existing_phash and existing_phash - phash == 0:  # Exact hash match
-            # Hash is identical - now check encoding for exact duplicate
-            db_embedding = np.array(entry["embedding"])
-            distance = np.linalg.norm(query_embedding - db_embedding)
-            if distance <= 0.05:  # Very strict threshold for exact duplicates
-                return True
+        if (entry["phash"] == phash_str and 
+            entry["embedding"] == query_embedding):  # Exact comparison
+            return True
     
-    # Check in global processed data (limited to last 1000 for memory)
-    for i, existing_hash_str in enumerate(list(processed_hashes)[-1000:]):
-        existing_phash = str_to_phash(existing_hash_str)
-        if existing_phash and existing_phash - phash == 0:  # Exact hash match
-            # Hash is identical - check corresponding encoding if available
-            if i < len(processed_encodings):
-                db_embedding = np.array(processed_encodings[i])
-                distance = np.linalg.norm(query_embedding - db_embedding)
-                if distance <= 0.05:  # Very strict threshold for exact duplicates
-                    return True
-    
-    # Not a duplicate - add to processed data
-    processed_hashes.add(phash_str)
-    processed_encodings.append(encoding)
-    
-    # Keep only last 1000 entries to prevent memory issues
-    if len(processed_encodings) > 1000:
-        processed_encodings.pop(0)
-        # Also clean up hashes to match
-        if len(processed_hashes) > 1000:
-            # Convert to list, remove first item, convert back to set
-            hash_list = list(processed_hashes)
-            hash_list.pop(0)
-            processed_hashes = set(hash_list)
+    # Check entire database cache for exact duplicates
+    for entry in database_cache:
+        if (entry.get("phash") == phash_str and 
+            entry.get("embedding") == query_embedding):  # Exact comparison
+            return True
     
     return False
 
@@ -1081,10 +1084,11 @@ def thread_wiki(current_category_url, i):
             images = soup.find_all("img")
             process_images_in_article(images, url)
             
+            # Note: Database is now saved after each image, not after each article
             # Save results for this article (only if data exists)
             if current_article_data:
                 entries_saved += len(current_article_data)
-                save_database()
+                print(f"📊 Article completed: {entries_saved} total entries saved so far")
                 
             # Save last crawled article (for resume function)
             save_last_crawled_pages(url, i)
@@ -1207,10 +1211,11 @@ def crawl_images():
             images = soup.find_all("img")
             process_images_in_article(images, url)
             
+            # Note: Database is now saved after each image, not after each article
             # Save results for this article (only if data exists)
             if current_article_data:
                 entries_saved += len(current_article_data)
-                save_database()
+                print(f"📊 Article completed: {entries_saved} total entries saved so far")
                 
             # Save last crawled article (for resume function)
             save_last_crawled_page(url)
@@ -1249,8 +1254,10 @@ def process_images_in_article(images, url):
         process_single_image(img_url, url)
 
 def process_single_image(img_url, page_url):
+    print(f"🖼️ Processing image from page: {page_url}")
     image_bytes = download_image(img_url)
     if not image_bytes:
+        print(f"❌ Failed to download image: {img_url}")
         return None
     try:
         image = face_recognition.load_image_file(BytesIO(image_bytes))
@@ -1259,7 +1266,7 @@ def process_single_image(img_url, page_url):
             process_image(image, image_bytes, img_url, page_url)
             result = True
         else:
-            print(f"No face found: {img_url}")
+            print(f"🚫 No face found in image: {img_url}")
             result = False
         
         # Immediate memory cleanup after processing
@@ -1284,6 +1291,9 @@ if __name__ == "__main__":
     restart_delays = [30, 60, 120, 300, 600]  # Progressive delays: 30s, 1m, 2m, 5m, 10m
 
     print("Starting Living People Crawler (append-only) with auto-restart...")
+    
+    # Load database cache once at startup
+    load_database_cache()
 
     while True:
         try:
