@@ -176,6 +176,13 @@ def save_database():
         # Add new entries to database cache
         database_cache.extend(current_article_data)
         
+        # Update hash index with new entries
+        for entry in current_article_data:
+            phash_str = entry.get("phash", "")
+            if phash_str not in hash_index:
+                hash_index[phash_str] = []
+            hash_index[phash_str].append(entry)
+        
         # Clear current article data after saving
         current_article_data.clear()
     except Exception as e:
@@ -644,20 +651,34 @@ processed_encodings = []
 # Global database cache - loaded once at startup
 database_cache = []
 
+# Hash index for fast duplicate detection
+hash_index = {}  # phash_str -> list of entries with that hash
+
 def load_database_cache():
-    """Load the entire database once at startup"""
-    global database_cache
+    """Load the entire database once at startup and build hash index"""
+    global database_cache, hash_index
     try:
         if os.path.exists("face_embeddings.json"):
             with open("face_embeddings.json", "r") as f:
                 database_cache = json.load(f)
                 print(f"Database loaded: {len(database_cache)} entries")
+                
+                # Build hash index for fast lookup
+                hash_index.clear()
+                for entry in database_cache:
+                    phash_str = entry.get("phash", "")
+                    if phash_str not in hash_index:
+                        hash_index[phash_str] = []
+                    hash_index[phash_str].append(entry)
+                print(f"Hash index built with {len(hash_index)} unique hashes")
         else:
             database_cache = []
+            hash_index = {}
             print("No existing database found")
     except Exception as e:
         print(f"Error loading database: {e}")
         database_cache = []
+        hash_index = {}
 
 def compare_hashes(phash):
     """Da wir keine Datei lesen - immer False (keine Duplikate erkennen)."""
@@ -669,20 +690,23 @@ def compare_hashes(phash):
     return False
 
 def is_duplicate_image_and_face(phash, encoding):
-    """Check if image/face is exact duplicate by comparing against entire database."""
+    """Check if image/face is exact duplicate using hash index for fast lookup."""
     phash_str = str(phash)
     query_embedding = encoding  # Keep as list for exact comparison
     
-    # Check in current article data for exact duplicates
+    # First check: Hash must match exactly
+    if phash_str not in hash_index:
+        return False  # No entries with this hash
+    
+    # Second check: Only compare embeddings for entries with matching hash
+    for entry in hash_index[phash_str]:
+        if entry.get("embedding") == query_embedding:  # Exact embedding comparison
+            return True
+    
+    # Also check current article data for entries not yet in hash index
     for entry in current_article_data:
         if (entry["phash"] == phash_str and 
             entry["embedding"] == query_embedding):  # Exact comparison
-            return True
-    
-    # Check entire database cache for exact duplicates
-    for entry in database_cache:
-        if (entry.get("phash") == phash_str and 
-            entry.get("embedding") == query_embedding):  # Exact comparison
             return True
     
     return False
