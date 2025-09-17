@@ -4,6 +4,7 @@ from flask_limiter.util import get_remote_address
 import numpy as np
 import json
 import os
+import re
 import shutil
 import time
 import threading
@@ -140,6 +141,34 @@ def find_matches(query_embedding, db, tolerance=0.5):
     matches.sort(key=lambda x: x[1])  # sort by similarity
     return matches
 
+def extract_last_page_url(file_path, max_read_bytes=50000):
+    """
+    Reads the file from the end and extracts the last 'page_url'.
+    max_read_bytes: Bytes to read backwards (increase if needed).
+    """
+    try:
+        with open(file_path, 'rb') as f:
+            f.seek(0, 2)  # Go to the end
+            file_size = f.tell()
+            read_size = min(max_read_bytes, file_size)
+            f.seek(file_size - read_size)
+            data_bytes = f.read()
+            if data_bytes is None:
+                print("⚠️ File read returned None - possible file corruption")
+                return None
+            data = data_bytes.decode('utf-8', errors='ignore')
+        
+        # Search for the last "page_url" in the data
+        # Regex: "page_url": "VALUE"
+        match = re.search(r'"page_url"\s*:\s*"([^"]+)"', data)
+        if match:
+            return match.group(1)  # Extract the value
+        else:
+            return None
+    except Exception as e:
+        print(f"Error: {e}")
+        return None
+
 @app.route('/search', methods=['POST'])
 @limiter.limit("5 per minute")
 def search_faces():
@@ -185,6 +214,7 @@ def health_check():
         'status': 'healthy',
         'database_loaded': db is not None,
         'total_entries': len(db) if db else 0,
+        'last_page_url': extract_last_page_url('face_embeddings_server.json'),
     })
 
 @app.route('/stats', methods=['GET'])
