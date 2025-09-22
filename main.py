@@ -149,16 +149,11 @@ def server(encodings):
 # Check API health
 def check_api_health():
     if not API_URL:
-        st.error("❌ No API_URL configured")
         return False
     try:
-        st.info(f"🔍 Checking health at: {API_URL}/health")
         response = requests.get(f"{API_URL}/health", timeout=20)
-        st.info(f"📡 Response status: {response.status_code}")
-        st.info(f"📄 Response content: {response.text[:200]}")
         return response.status_code == 200
-    except Exception as e:
-        st.error(f"🚨 Health check failed: {str(e)}")
+    except Exception:
         return False
 
 def main():
@@ -175,16 +170,11 @@ def main():
     local_available = os.path.exists(path)
     
     if API_URL and TOKEN:
-        # Check API health
+        # Only check API health if no local DB is available
         api_available = check_api_health()
         if api_available:
             use_server = True
             st.info("🌐 Using API server (all uploaded images are deleted immediately after usage)")
-        elif local_available:
-            # Fallback to local DB if API fails but local DB exists
-            use_server = False
-            st.warning("⚠️ API server not reachable, using local database as fallback")
-            st.info(f"💻 Using local database ({len(db) if 'db' in locals() else 0} entries)")
         else:
             st.error("❌ No local database found and API server is not reachable!")
             use_server = False
@@ -193,6 +183,7 @@ def main():
         st.info(f"💻 Using local database ({len(db) if 'db' in locals() else 0} entries)")
     else:
         st.error("❌ No database file found and no API configured!")
+        st.stop()
         use_server = False
 
     uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"])

@@ -40,7 +40,7 @@ def verify_token():
 # Rate limiting
 limiter = Limiter(
     key_func=get_remote_address,
-    default_limits=["200 per day", "50 per hour", "10 per minute"]
+    default_limits=["20 per minute"]
 )
 limiter.init_app(app)
 
