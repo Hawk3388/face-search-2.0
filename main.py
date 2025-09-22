@@ -171,13 +171,19 @@ def main():
     local_available = os.path.exists(path)
     
     if API_URL and TOKEN:
-        # Only check API health if no local DB is available
+        # Check API health
         api_available = check_api_health()
         if api_available:
             use_server = True
             st.info("🌐 Using API server (all uploaded images are deleted immediately after usage)")
+        elif local_available:
+            # Fallback to local DB if API fails but local DB exists
+            use_server = False
+            st.warning("⚠️ API server not reachable, using local database as fallback")
+            st.info(f"💻 Using local database ({len(db) if 'db' in locals() else 0} entries)")
         else:
             st.error("❌ No local database found and API server is not reachable!")
+            st.stop()
             use_server = False
     elif local_available:
         use_server = False
