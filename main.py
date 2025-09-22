@@ -156,33 +156,61 @@ def check_api_health():
     except Exception:
         return False
 
-# Get health information for the database
-def get_health_info():
-    """Get health information about the local database"""
-    health_info = {}
-    
-    # Get number of entries
+# Get database stats from API
+def get_api_stats():
+    if not API_URL:
+        return None
     try:
-        with open("face_embeddings.json", "r") as f:
-            db = json.load(f)
-            health_info["entries"] = len(db)
+        headers = {}
+        if TOKEN:
+            headers['Authorization'] = f'Bearer {TOKEN}'
+        response = requests.get(f"{API_URL}/stats", headers=headers, timeout=20)
+        if response.status_code == 200:
+            return response.json()
+        return None
     except Exception:
-        health_info["entries"] = 0
-    
-    # Get last crawled page
-    try:
-        with open("last_crawled_page.txt", "r") as f:
-            last_page = f.read().strip()
-            health_info["last_page"] = last_page
-    except Exception:
-        health_info["last_page"] = "Unknown"
-    
-    return health_info
+        return None
 
 def main():
     # App
     st.set_page_config(page_title="Face Search", layout="centered")
     st.title("🔍 Face Search")
+
+    # Add stats button in the top right corner
+    col1, col2, col3 = st.columns([4, 1, 1])
+    with col3:
+        if st.button("📊 Stats", help="View database statistics"):
+            # Try to get stats from API first, then fallback to local
+            stats = get_api_stats()
+            if stats:
+                st.success("📊 **API Database Stats**")
+                st.metric("Total Entries", f"{stats.get('total_entries', 'N/A'):,}")
+                if 'last_crawled_page' in stats:
+                    page_name = stats['last_crawled_page'].split("/")[-1].replace("_", " ")
+                    st.write(f"**Last Crawled:** `{page_name}`")
+                    st.markdown(f"🔗 [View Page]({stats['last_crawled_page']})")
+            else:
+                # Fallback to local stats
+                path = "face_embeddings.json"
+                if os.path.exists(path):
+                    try:
+                        with open(path, "r") as f:
+                            db = json.load(f)
+                        entry_count = len(db)
+                        st.info("💻 **Local Database Stats**")
+                        st.metric("Total Entries", f"{entry_count:,}")
+                    except:
+                        st.error("❌ Could not load local database")
+                
+                # Check last crawled page locally
+                try:
+                    with open("last_crawled_page.txt", "r") as f:
+                        last_page = f.read().strip()
+                    page_name = last_page.split("/")[-1].replace("_", " ")
+                    st.write(f"**Last Crawled:** `{page_name}`")
+                    st.markdown(f"🔗 [View Page]({last_page})")
+                except:
+                    st.write("**Last Crawled:** `No data`")
 
     path = "face_embeddings.json"
 
@@ -209,60 +237,9 @@ def main():
         st.stop()
         use_server = False
 
-    # Initialize session state for health info display
-    if 'show_health_info' not in st.session_state:
-        st.session_state.show_health_info = False
-    
-    # Health info section with better layout
-    st.markdown("---")
-    col1, col2, col3 = st.columns([2, 1, 2])
-    with col2:
-        health_button = st.button("📊 Database Info", 
-                                help="Show database statistics", 
-                                type="secondary",
-                                use_container_width=True)
-        if health_button:
-            st.session_state.show_health_info = not st.session_state.show_health_info
-    
-    # Show health info if button was clicked and database is available
-    if st.session_state.show_health_info and local_available:
-        health_info = get_health_info()
-        
-        # Create a nice info box
-        st.markdown(f"""
-        <div style="
-            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 15px;
-            border-radius: 10px;
-            margin: 15px 0;
-            text-align: center;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        ">
-            <h4 style="margin: 0 0 10px 0;">📊 Database Health</h4>
-            <div style="display: flex; justify-content: space-around; flex-wrap: wrap;">
-                <div style="margin: 5px;">
-                    <strong>{health_info["entries"]}</strong><br>
-                    <small>Entries</small>
-                </div>
-                <div style="margin: 5px;">
-                    <strong><a href="{health_info["last_page"]}" target="_blank" style="color: #ffd700; text-decoration: none;">
-                        {health_info["last_page"].split("/")[-1] if health_info["last_page"] != "Unknown" else "Unknown"}
-                    </a></strong><br>
-                    <small>Last Page</small>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.markdown("---")
-
     uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"])
 
     if uploaded_file:
-        # Hide health info when image is uploaded
-        st.session_state.show_health_info = False
-        
         # Check file type and load as PIL Image if necessary
         if uploaded_file.type == "image/webp" or uploaded_file.name.lower().endswith(".webp"):
             pil_img = Image.open(uploaded_file).convert("RGB")
@@ -302,7 +279,7 @@ def main():
                 if selected_face is not None:
                     st.info(f"🔎 Searching for Face {selected_face + 1}...")
                     # Use selected mode
-                    if use_server and 'api_available' in locals() and api_available:
+                    if use_server and api_available:
                         server([encodings[selected_face]])
                     elif not use_server and local_available:
                         serverless([encodings[selected_face]], db)
@@ -312,7 +289,7 @@ def main():
                 # Single face - search automatically
                 st.info("🔎 Searching for similar faces...")
                 # Use selected mode
-                if use_server and 'api_available' in locals() and api_available:
+                if use_server and api_available:
                     server(encodings)
                 elif not use_server and local_available:
                     serverless(encodings, db)
