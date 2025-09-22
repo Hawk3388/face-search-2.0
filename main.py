@@ -269,9 +269,13 @@ def main():
 
     uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"])
 
+    # Reset health display when new image is uploaded
+    if uploaded_file is not None:
+        if 'last_uploaded_file' not in st.session_state or st.session_state.last_uploaded_file != uploaded_file.name:
+            st.session_state.show_health = False
+            st.session_state.last_uploaded_file = uploaded_file.name
+
     if uploaded_file:
-        # Hide health info when image is uploaded
-        st.session_state.show_health = False
         
         # Check file type and load as PIL Image if necessary
         if uploaded_file.type == "image/webp" or uploaded_file.name.lower().endswith(".webp"):
