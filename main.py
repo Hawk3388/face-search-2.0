@@ -174,11 +174,9 @@ def main():
     st.set_page_config(page_title="Face Search", layout="centered")
     st.title("🔍 Face Search")
 
-    # Initialize session state
-    if 'show_health' not in st.session_state:
-        st.session_state.show_health = True
-    if 'health_clicked' not in st.session_state:
-        st.session_state.health_clicked = False
+    # Session state for health button visibility
+    if 'show_health_button' not in st.session_state:
+        st.session_state.show_health_button = True
 
     path = "face_embeddings.json"
 
@@ -195,23 +193,30 @@ def main():
             use_server = True
             st.info("🌐 Using API server (all uploaded images are deleted immediately after usage)")
             
-            # Show health button only if show_health is True
-            if st.session_state.show_health:
+            # Show health button in sidebar only if button should be visible
+            if st.session_state.show_health_button:
                 with st.sidebar:
-                    if st.button("🏥 Show API Health", key="health_btn"):
-                        st.session_state.health_clicked = True
+                    health_button_clicked = st.button("🏥 API Health Check", key="health_btn")
+                
+                # Show health details in MAIN area when button is clicked
+                if health_button_clicked:
+                    st.subheader("🏥 API Health Status")
+                    health_data = get_api_health_details()
+                    if health_data and "error" not in health_data:
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Status", "✅ Healthy")
+                        with col2:
+                            st.metric("Database", "✅ Loaded" if health_data.get('database_loaded') else "❌ Error")
+                        with col3:
+                            st.metric("Entries", health_data.get('total_entries', 'Unknown'))
+                        
+                        if health_data.get('last_page_url'):
+                            st.info(f"**Last crawled page:** {health_data.get('last_page_url')}")
+                    else:
+                        st.error(f"❌ API Error: {health_data.get('error', 'Unknown error')}")
+                    st.divider()
                     
-                    # Show health details only AFTER button was clicked
-                    if st.session_state.health_clicked:
-                        health_data = get_api_health_details()
-                        if health_data and "error" not in health_data:
-                            st.success("✅ API is healthy")
-                            st.write(f"**Database loaded:** {'✅' if health_data.get('database_loaded') else '❌'}")
-                            st.write(f"**Total entries:** {health_data.get('total_entries', 'Unknown')}")
-                            if health_data.get('last_page_url'):
-                                st.write(f"**Last page:** {health_data.get('last_page_url')[:50]}...")
-                        else:
-                            st.error(f"❌ {health_data.get('error', 'Unknown error')}")
         else:
             st.error("❌ No local database found and API server is not reachable!")
             use_server = False
@@ -223,12 +228,11 @@ def main():
         st.stop()
         use_server = False
 
-    uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"], key="file_upload")
+    uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"], key="file_uploader")
 
     # Hide health button when file is uploaded
     if uploaded_file:
-        st.session_state.show_health = False
-        st.session_state.health_clicked = False
+        st.session_state.show_health_button = False
 
     if uploaded_file:
         # Check file type and load as PIL Image if necessary
