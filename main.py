@@ -156,27 +156,33 @@ def check_api_health():
     except Exception:
         return False
 
-def get_api_health_details():
-    """Get detailed health information from API"""
-    if not API_URL:
-        return None
+# Get health information for the database
+def get_health_info():
+    """Get health information about the local database"""
+    health_info = {}
+    
+    # Get number of entries
     try:
-        response = requests.get(f"{API_URL}/health", timeout=20)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return {"error": f"HTTP {response.status_code}"}
-    except Exception as e:
-        return {"error": f"Connection error: {str(e)}"}
+        with open("face_embeddings.json", "r") as f:
+            db = json.load(f)
+            health_info["entries"] = len(db)
+    except Exception:
+        health_info["entries"] = 0
+    
+    # Get last crawled page
+    try:
+        with open("last_crawled_page.txt", "r") as f:
+            last_page = f.read().strip()
+            health_info["last_page"] = last_page
+    except Exception:
+        health_info["last_page"] = "Unknown"
+    
+    return health_info
 
 def main():
     # App
     st.set_page_config(page_title="Face Search", layout="centered")
     st.title("🔍 Face Search")
-
-    # Session state for health button visibility
-    if 'show_health_button' not in st.session_state:
-        st.session_state.show_health_button = True
 
     path = "face_embeddings.json"
 
@@ -192,30 +198,6 @@ def main():
         if api_available:
             use_server = True
             st.info("🌐 Using API server (all uploaded images are deleted immediately after usage)")
-            
-            # Show health button in MAIN area only if button should be visible
-            if st.session_state.show_health_button:
-                health_button_clicked = st.button("🏥 API Health Check", key="health_btn")
-            
-                # Show health details in MAIN area when button is clicked
-                if health_button_clicked:
-                    st.subheader("🏥 API Health Status")
-                    health_data = get_api_health_details()
-                    if health_data and "error" not in health_data:
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Status", "✅ Healthy")
-                        with col2:
-                            st.metric("Database", "✅ Loaded" if health_data.get('database_loaded') else "❌ Error")
-                        with col3:
-                            st.metric("Entries", health_data.get('total_entries', 'Unknown'))
-                        
-                        if health_data.get('last_page_url'):
-                            st.info(f"**Last crawled page:** {health_data.get('last_page_url')}")
-                    else:
-                        st.error(f"❌ API Error: {health_data.get('error', 'Unknown error')}")
-                    st.divider()
-                    
         else:
             st.error("❌ No local database found and API server is not reachable!")
             use_server = False
@@ -227,13 +209,38 @@ def main():
         st.stop()
         use_server = False
 
-    uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"], key="file_uploader")
+    # Initialize session state for health info display
+    if 'show_health_info' not in st.session_state:
+        st.session_state.show_health_info = False
+    
+    # Health info button (compact design)
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("ℹ️ Health Info", help="Show database statistics", use_container_width=False):
+            st.session_state.show_health_info = not st.session_state.show_health_info
+    
+    # Show health info if button was clicked
+    if st.session_state.show_health_info and local_available:
+        health_info = get_health_info()
+        with st.container():
+            st.markdown("""
+            <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin: 10px 0; border-left: 4px solid #1f77b4;">
+                <small><strong>📊 Database Health</strong><br>
+                Entries: {entries}<br>
+                Last Page: <a href="{last_page}" target="_blank" style="color: #1f77b4; text-decoration: none;">{last_page_short}</a></small>
+            </div>
+            """.format(
+                entries=health_info["entries"],
+                last_page=health_info["last_page"],
+                last_page_short=health_info["last_page"].split("/")[-1] if health_info["last_page"] != "Unknown" else "Unknown"
+            ), unsafe_allow_html=True)
 
-    # Hide health button when file is uploaded
-    if uploaded_file:
-        st.session_state.show_health_button = False
+    uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"])
 
     if uploaded_file:
+        # Hide health info when image is uploaded
+        st.session_state.show_health_info = False
+        
         # Check file type and load as PIL Image if necessary
         if uploaded_file.type == "image/webp" or uploaded_file.name.lower().endswith(".webp"):
             pil_img = Image.open(uploaded_file).convert("RGB")
