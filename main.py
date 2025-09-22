@@ -77,8 +77,8 @@ def serverless(encodings, db):
     else:
         st.success(f"✅ {len(results)} matches found!")
         for entry, dist in results[:10]:  # show top 10
-            st.markdown(f"<small>**Similarity**: {dist:.4f}</small>", unsafe_allow_html=True)
-            st.markdown(f"<small>[View image]({entry['image_url']})  \n[Visit page]({entry['page_url']})</small>", unsafe_allow_html=True)
+            st.markdown(f"**Similarity**: {dist:.4f}")
+            st.markdown(f"[View image]({entry['image_url']})  \n[Visit page]({entry['page_url']})")
             # Always try to show image, show placeholder if failed
             try:
                 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
@@ -115,13 +115,13 @@ def server(encodings):
                     if isinstance(match, list) and len(match) >= 2:
                         # Format: [entry_dict, distance]
                         entry, distance = match[0], match[1]
-                        st.markdown(f"<small>**Distance**: {distance:.4f}</small>", unsafe_allow_html=True)
-                        st.markdown(f"<small>[View image]({entry['image_url']})  \n[Visit page]({entry['page_url']})</small>", unsafe_allow_html=True)
+                        st.markdown(f"**Distance**: {distance:.4f}")
+                        st.markdown(f"[View image]({entry['image_url']})  \n[Visit page]({entry['page_url']})")
                         img_url = entry['image_url']
                     elif isinstance(match, dict):
                         # Format: {"distance": x, "similarity": y, "image_url": z, ...}
-                        st.markdown(f"<small>**Distance**: {match['distance']:.4f} | **Similarity**: {match['similarity']:.3f}</small>", unsafe_allow_html=True)
-                        st.markdown(f"<small>[View image]({match['image_url']})  \n[Visit page]({match['page_url']})</small>", unsafe_allow_html=True)
+                        st.markdown(f"**Distance**: {match['distance']:.4f} | **Similarity**: {match['similarity']:.3f}")
+                        st.markdown(f"[View image]({match['image_url']})  \n[Visit page]({match['page_url']})")
                         img_url = match['image_url']
                     else:
                         st.warning("Unknown response format from server")
@@ -157,104 +157,10 @@ def check_api_health():
     except Exception:
         return False
 
-# Get detailed health information
-def get_health_info():
-    """Get detailed server health information"""
-    if not API_URL:
-        return None
-    try:
-        headers = {}
-        if TOKEN:
-            headers['Authorization'] = f'Bearer {TOKEN}'
-        response = requests.get(f"{API_URL}/health", headers=headers, timeout=5)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return {"error": f"HTTP {response.status_code}", "status": "error"}
-    except Exception as e:
-        return {"error": str(e), "status": "error"}
-
 def main():
     # App
     st.set_page_config(page_title="Face Search", layout="centered")
     st.title("🔍 Face Search")
-
-    # Initialize session state for health info
-    if 'show_health' not in st.session_state:
-        st.session_state.show_health = False
-    if 'health_info' not in st.session_state:
-        st.session_state.health_info = None
-
-    # Health Check Section - elegant design without sidebar
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.button("🏥 Check Server Health", type="secondary", use_container_width=True):
-            with st.spinner("Checking server health..."):
-                st.session_state.health_info = get_health_info()
-                st.session_state.show_health = True
-
-    # File uploader FIRST
-    uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"])
-    
-    # Hide health info when image is uploaded
-    if uploaded_file is not None:
-        st.session_state.show_health = False
-
-    # Display health info directly under the button (only when no file uploaded)
-    if st.session_state.show_health and st.session_state.health_info and uploaded_file is None:
-        health_info = st.session_state.health_info
-        
-        if health_info is None:
-            st.error("❌ No API URL configured")
-        elif "error" in health_info:
-            st.error(f"❌ Server Error: {health_info['error']}")
-        else:
-            # Create a nice info box
-            with st.container():
-                st.markdown("---")
-                
-                # Server status with colored indicator
-                if health_info.get("status") == "healthy":
-                    st.markdown("🟢 **Server Status:** Healthy")
-                else:
-                    st.markdown(f"🟡 **Server Status:** {health_info.get('status', 'unknown')}")
-                
-                # Database info in columns
-                info_col1, info_col2 = st.columns(2)
-                
-                with info_col1:
-                    if health_info.get("database_loaded"):
-                        entries = health_info.get('total_entries', 0)
-                        st.metric(
-                            label="📊 Database Entries", 
-                            value=f"{entries:,}"
-                        )
-                    else:
-                        st.metric(
-                            label="📊 Database Status", 
-                            value="Not Loaded"
-                        )
-                
-                with info_col2:
-                    last_page = health_info.get("last_page_url")
-                    if last_page:
-                        # Extract just the page title from URL
-                        page_title = last_page.split("/")[-1].replace("_", " ")
-                        if len(page_title) > 20:
-                            page_title = page_title[:20] + "..."
-                        st.metric(
-                            label="📄 Last Page", 
-                            value=page_title
-                        )
-                
-                st.markdown("---")
-
-    # File uploader AFTER health info
-    uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"])
-    
-    # Hide health info when image is uploaded
-    if uploaded_file is not None:
-        st.session_state.show_health = False
 
     path = "face_embeddings.json"
 
@@ -281,8 +187,9 @@ def main():
         st.stop()
         use_server = False
 
+    uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"])
+
     if uploaded_file:
-        
         # Check file type and load as PIL Image if necessary
         if uploaded_file.type == "image/webp" or uploaded_file.name.lower().endswith(".webp"):
             pil_img = Image.open(uploaded_file).convert("RGB")
