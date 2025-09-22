@@ -184,10 +184,10 @@ def main():
             if api_health_data:
                 st.markdown("**🌐 API Database**")
                 st.write(f"**Entries:** {api_health_data.get('total_entries', 'N/A'):,}")
-                if 'last_crawled_page' in api_health_data:
-                    page_name = api_health_data['last_crawled_page'].split("/")[-1].replace("_", " ")
-                    st.write(f"**Last:** {page_name}")
-                    st.link_button("🔗 View Page", api_health_data['last_crawled_page'])
+                if 'last_page_url' in api_health_data:
+                    page_name = api_health_data['last_page_url'].split("/")[-1].replace("_", " ")
+                    st.write(f"**Last Crawled Page:** {page_name}")
+                    st.link_button("🔗 View Page", api_health_data['last_page_url'])
             else:
                 st.markdown("**💻 Local Database**")
                 # Fallback to local stats
