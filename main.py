@@ -156,15 +156,12 @@ def check_api_health():
     except Exception:
         return False
 
-# Get database stats from API
-def get_api_stats():
+# Get database stats from health endpoint
+def get_health_stats():
     if not API_URL:
         return None
     try:
-        headers = {}
-        if TOKEN:
-            headers['Authorization'] = f'Bearer {TOKEN}'
-        response = requests.get(f"{API_URL}/stats", headers=headers, timeout=20)
+        response = requests.get(f"{API_URL}/health", timeout=20)
         if response.status_code == 200:
             return response.json()
         return None
@@ -181,15 +178,16 @@ def main():
         st.title("🔍 Face Search")
     with col2:
         with st.popover("📊 Stats", help="Database statistics"):
-            # Try to get stats from API first, then fallback to local
-            stats = get_api_stats()
-            if stats:
+            # Use health API to get all info
+            api_health_data = get_health_stats()
+            
+            if api_health_data:
                 st.markdown("**🌐 API Database**")
-                st.write(f"**Entries:** {stats.get('total_entries', 'N/A'):,}")
-                if 'last_crawled_page' in stats:
-                    page_name = stats['last_crawled_page'].split("/")[-1].replace("_", " ")
+                st.write(f"**Entries:** {api_health_data.get('total_entries', 'N/A'):,}")
+                if 'last_crawled_page' in api_health_data:
+                    page_name = api_health_data['last_crawled_page'].split("/")[-1].replace("_", " ")
                     st.write(f"**Last:** {page_name}")
-                    st.link_button("🔗 View Page", stats['last_crawled_page'])
+                    st.link_button("🔗 View Page", api_health_data['last_crawled_page'])
             else:
                 st.markdown("**💻 Local Database**")
                 # Fallback to local stats
