@@ -149,11 +149,17 @@ def server(encodings):
 # Check API health
 def check_api_health():
     if not API_URL:
+        st.write("🔍 DEBUG: No API_URL configured")
         return False
     try:
+        st.write(f"🔍 DEBUG: Checking API health at: {API_URL}/health")
         response = requests.get(f"{API_URL}/health", timeout=20)
+        st.write(f"🔍 DEBUG: Response status: {response.status_code}")
+        if response.status_code != 200:
+            st.write(f"🔍 DEBUG: Response text: {response.text}")
         return response.status_code == 200
-    except Exception:
+    except Exception as e:
+        st.write(f"🔍 DEBUG: Exception during health check: {e}")
         return False
 
 def main():

@@ -1,6 +1,4 @@
 from flask import Flask, request, jsonify
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 import numpy as np
 import json
 import os
@@ -36,13 +34,6 @@ def verify_token():
         token = token[7:]
     
     return token == AUTH_TOKEN
-
-# Rate limiting
-limiter = Limiter(
-    key_func=get_remote_address,
-    default_limits=["20 per minute"]
-)
-limiter.init_app(app)
 
 # Global database
 db = None
@@ -170,7 +161,6 @@ def extract_last_page_url(file_path, max_read_bytes=50000):
         return None
 
 @app.route('/search', methods=['POST'])
-@limiter.limit("5 per minute")
 def search_faces():
     """Search for similar faces using face encoding"""
     try:
