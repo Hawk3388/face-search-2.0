@@ -149,13 +149,16 @@ def server(encodings):
 # Check API health
 def check_api_health():
     if not API_URL:
+        st.error("❌ No API_URL configured")
         return False
     try:
+        st.info(f"🔍 Checking health at: {API_URL}/health")
         response = requests.get(f"{API_URL}/health", timeout=20)
-        print(f"Health check response: {response.status_code}")  # Debug info
+        st.info(f"📡 Response status: {response.status_code}")
+        st.info(f"📄 Response content: {response.text[:200]}")
         return response.status_code == 200
     except Exception as e:
-        print(f"Health check failed: {e}")  # Debug info
+        st.error(f"🚨 Health check failed: {str(e)}")
         return False
 
 def main():
