@@ -185,6 +185,11 @@ def main():
     if 'health_info' not in st.session_state:
         st.session_state.health_info = None
 
+    # Check if there's an uploaded file and hide health info FIRST
+    uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"])
+    if uploaded_file is not None:
+        st.session_state.show_health = False
+
     # Health Check Section - elegant design without sidebar
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -193,8 +198,8 @@ def main():
                 st.session_state.health_info = get_health_info()
                 st.session_state.show_health = True
 
-    # Display health info directly under the button (before file uploader)
-    if st.session_state.show_health and st.session_state.health_info:
+    # Display health info directly under the button (only if no image uploaded)
+    if st.session_state.show_health and st.session_state.health_info and uploaded_file is None:
         health_info = st.session_state.health_info
         
         if health_info is None:
@@ -266,12 +271,6 @@ def main():
         st.error("❌ No database file found and no API configured!")
         st.stop()
         use_server = False
-
-    uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"])
-
-    # Hide health info whenever an image is uploaded (any image)
-    if uploaded_file is not None:
-        st.session_state.show_health = False
 
     if uploaded_file:
         
