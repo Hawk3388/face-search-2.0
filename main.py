@@ -184,14 +184,14 @@ def main():
             # Try to get stats from API first, then fallback to local
             stats = get_api_stats()
             if stats:
-                st.markdown("### 🌐 API Database")
-                st.metric("Entries", f"{stats.get('total_entries', 'N/A'):,}")
+                st.markdown("**🌐 API Database**")
+                st.write(f"**Entries:** {stats.get('total_entries', 'N/A'):,}")
                 if 'last_crawled_page' in stats:
                     page_name = stats['last_crawled_page'].split("/")[-1].replace("_", " ")
-                    st.caption(f"Last: {page_name}")
+                    st.write(f"**Last:** {page_name}")
                     st.link_button("🔗 View Page", stats['last_crawled_page'])
             else:
-                st.markdown("### 💻 Local Database")
+                st.markdown("**💻 Local Database**")
                 # Fallback to local stats
                 path = "face_embeddings.json"
                 if os.path.exists(path):
@@ -199,7 +199,7 @@ def main():
                         with open(path, "r") as f:
                             db = json.load(f)
                         entry_count = len(db)
-                        st.metric("Entries", f"{entry_count:,}")
+                        st.write(f"**Entries:** {entry_count:,}")
                     except:
                         st.error("❌ Error loading DB")
                 
@@ -208,10 +208,10 @@ def main():
                     with open("last_crawled_page.txt", "r") as f:
                         last_page = f.read().strip()
                     page_name = last_page.split("/")[-1].replace("_", " ")
-                    st.caption(f"Last: {page_name}")
+                    st.write(f"**Last:** {page_name}")
                     st.link_button("🔗 View Page", last_page)
                 except:
-                    st.caption("Last: No data")
+                    st.write("**Last:** No data")
 
     path = "face_embeddings.json"
 
