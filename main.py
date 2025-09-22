@@ -201,9 +201,11 @@ def main():
                         entry_count = len(db)
                         st.write(f"**Entries:** {entry_count:,}")
                     except:
-                        st.error("❌ Error loading DB")
+                        st.write("**Entries:** Error loading DB")
+                else:
+                    st.write("**Entries:** No local DB")
                 
-                # Check last crawled page locally
+                # Always check last crawled page locally
                 try:
                     with open("last_crawled_page.txt", "r") as f:
                         last_page = f.read().strip()
