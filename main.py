@@ -165,35 +165,16 @@ def get_api_health_details():
         if response.status_code == 200:
             return response.json()
         else:
-            return {"error": f"HTTP {response.status_code}: {response.text}"}
+            return {"error": f"HTTP {response.status_code}"}
     except Exception as e:
         return {"error": f"Connection error: {str(e)}"}
-
-def show_health_details():
-    """Show detailed health information in sidebar"""
-    with st.sidebar:
-        st.subheader("🏥 API Health Details")
-        
-        health_data = get_api_health_details()
-        if health_data:
-            if "error" in health_data:
-                st.error(f"❌ {health_data['error']}")
-            else:
-                st.success("✅ API is healthy")
-                st.write(f"**Database loaded:** {'✅' if health_data.get('database_loaded') else '❌'}")
-                st.write(f"**Total entries:** {health_data.get('total_entries', 'Unknown')}")
-                if health_data.get('last_page_url'):
-                    st.write(f"**Last crawled page:**")
-                    st.code(health_data.get('last_page_url'), language="text")
-        else:
-            st.error("❌ No API configured")
 
 def main():
     # App
     st.set_page_config(page_title="Face Search", layout="centered")
     st.title("🔍 Face Search")
 
-    # Initialize session state for health info display
+    # Initialize session state
     if 'show_health' not in st.session_state:
         st.session_state.show_health = True
 
@@ -212,20 +193,19 @@ def main():
             use_server = True
             st.info("🌐 Using API server (all uploaded images are deleted immediately after usage)")
             
-            # Show health button only if no image uploaded yet
+            # Show health button only if show_health is True
             if st.session_state.show_health:
                 with st.sidebar:
-                    if st.button("🏥 Show API Health Details", key="health_button"):
+                    if st.button("🏥 Show API Health", key="health_btn"):
                         health_data = get_api_health_details()
                         if health_data and "error" not in health_data:
                             st.success("✅ API is healthy")
                             st.write(f"**Database loaded:** {'✅' if health_data.get('database_loaded') else '❌'}")
                             st.write(f"**Total entries:** {health_data.get('total_entries', 'Unknown')}")
                             if health_data.get('last_page_url'):
-                                st.write(f"**Last crawled page:**")
-                                st.code(health_data.get('last_page_url'), language="text")
+                                st.write(f"**Last page:** {health_data.get('last_page_url')[:50]}...")
                         else:
-                            st.error(f"❌ API Error: {health_data.get('error', 'Unknown error')}")
+                            st.error(f"❌ {health_data.get('error', 'Unknown error')}")
         else:
             st.error("❌ No local database found and API server is not reachable!")
             use_server = False
@@ -237,11 +217,13 @@ def main():
         st.stop()
         use_server = False
 
-    uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"], key="file_uploader_main")
+    uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"], key="file_upload")
+
+    # Hide health button when file is uploaded
+    if uploaded_file:
+        st.session_state.show_health = False
 
     if uploaded_file:
-        # Hide health info when image is uploaded
-        st.session_state.show_health = False
         # Check file type and load as PIL Image if necessary
         if uploaded_file.type == "image/webp" or uploaded_file.name.lower().endswith(".webp"):
             pil_img = Image.open(uploaded_file).convert("RGB")
