@@ -212,20 +212,20 @@ def main():
             use_server = True
             st.info("🌐 Using API server (all uploaded images are deleted immediately after usage)")
             
-            # Show health details only if session state allows it
+            # Show health button only if no image uploaded yet
             if st.session_state.show_health:
                 with st.sidebar:
-                    st.subheader("🏥 API Health Details")
-                    health_data = get_api_health_details()
-                    if health_data and "error" not in health_data:
-                        st.success("✅ API is healthy")
-                        st.write(f"**Database loaded:** {'✅' if health_data.get('database_loaded') else '❌'}")
-                        st.write(f"**Total entries:** {health_data.get('total_entries', 'Unknown')}")
-                        if health_data.get('last_page_url'):
-                            st.write(f"**Last crawled page:**")
-                            st.code(health_data.get('last_page_url'), language="text")
-                    else:
-                        st.error(f"❌ API Error: {health_data.get('error', 'Unknown error')}")
+                    if st.button("🏥 Show API Health Details", key="health_button"):
+                        health_data = get_api_health_details()
+                        if health_data and "error" not in health_data:
+                            st.success("✅ API is healthy")
+                            st.write(f"**Database loaded:** {'✅' if health_data.get('database_loaded') else '❌'}")
+                            st.write(f"**Total entries:** {health_data.get('total_entries', 'Unknown')}")
+                            if health_data.get('last_page_url'):
+                                st.write(f"**Last crawled page:**")
+                                st.code(health_data.get('last_page_url'), language="text")
+                        else:
+                            st.error(f"❌ API Error: {health_data.get('error', 'Unknown error')}")
         else:
             st.error("❌ No local database found and API server is not reachable!")
             use_server = False
