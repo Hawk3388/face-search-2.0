@@ -177,6 +177,8 @@ def main():
     # Initialize session state
     if 'show_health' not in st.session_state:
         st.session_state.show_health = True
+    if 'health_clicked' not in st.session_state:
+        st.session_state.health_clicked = False
 
     path = "face_embeddings.json"
 
@@ -197,6 +199,10 @@ def main():
             if st.session_state.show_health:
                 with st.sidebar:
                     if st.button("🏥 Show API Health", key="health_btn"):
+                        st.session_state.health_clicked = True
+                    
+                    # Show health details only AFTER button was clicked
+                    if st.session_state.health_clicked:
                         health_data = get_api_health_details()
                         if health_data and "error" not in health_data:
                             st.success("✅ API is healthy")
@@ -222,6 +228,7 @@ def main():
     # Hide health button when file is uploaded
     if uploaded_file:
         st.session_state.show_health = False
+        st.session_state.health_clicked = False
 
     if uploaded_file:
         # Check file type and load as PIL Image if necessary
