@@ -156,6 +156,38 @@ def check_api_health():
     except Exception:
         return False
 
+def get_api_health_details():
+    """Get detailed health information from API"""
+    if not API_URL:
+        return None
+    try:
+        response = requests.get(f"{API_URL}/health", timeout=20)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return {"error": f"HTTP {response.status_code}: {response.text}"}
+    except Exception as e:
+        return {"error": f"Connection error: {str(e)}"}
+
+def show_health_details():
+    """Show detailed health information in sidebar"""
+    with st.sidebar:
+        st.subheader("🏥 API Health Details")
+        
+        health_data = get_api_health_details()
+        if health_data:
+            if "error" in health_data:
+                st.error(f"❌ {health_data['error']}")
+            else:
+                st.success("✅ API is healthy")
+                st.write(f"**Database loaded:** {'✅' if health_data.get('database_loaded') else '❌'}")
+                st.write(f"**Total entries:** {health_data.get('total_entries', 'Unknown')}")
+                if health_data.get('last_page_url'):
+                    st.write(f"**Last crawled page:**")
+                    st.code(health_data.get('last_page_url'), language="text")
+        else:
+            st.error("❌ No API configured")
+
 def main():
     # App
     st.set_page_config(page_title="Face Search", layout="centered")
@@ -175,6 +207,11 @@ def main():
         if api_available:
             use_server = True
             st.info("🌐 Using API server (all uploaded images are deleted immediately after usage)")
+            
+            # Add health check button in sidebar
+            with st.sidebar:
+                if st.button("🏥 Show API Health Details"):
+                    show_health_details()
         else:
             st.error("❌ No local database found and API server is not reachable!")
             use_server = False
