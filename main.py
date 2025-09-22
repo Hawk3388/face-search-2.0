@@ -179,10 +179,10 @@ def main():
     st.set_page_config(page_title="Face Search", layout="centered")
     st.title("🔍 Face Search")
 
-    # Health Check Section
-    st.sidebar.header("🏥 Server Health")
-    if st.sidebar.button("Check Server Health"):
-        with st.sidebar:
+    # Health Check Section - elegant design without sidebar
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🏥 Check Server Health", type="secondary", use_container_width=True):
             with st.spinner("Checking server health..."):
                 health_info = get_health_info()
                 
@@ -191,26 +191,49 @@ def main():
                 elif "error" in health_info:
                     st.error(f"❌ Server Error: {health_info['error']}")
                 else:
-                    # Display health information
-                    if health_info.get("status") == "healthy":
-                        st.success("✅ Server is healthy!")
-                    else:
-                        st.warning(f"⚠️ Server status: {health_info.get('status', 'unknown')}")
-                    
-                    # Display database info
-                    if health_info.get("database_loaded"):
-                        st.info(f"📊 Database loaded: **{health_info.get('total_entries', 0):,}** entries")
-                    else:
-                        st.warning("⚠️ Database not loaded")
-                    
-                    # Display last processed page
-                    last_page = health_info.get("last_page_url")
-                    if last_page:
-                        st.info(f"📄 Last processed page: {last_page}")
-                    
-                    # Show raw response (expandable)
-                    with st.expander("Show raw health data"):
-                        st.json(health_info)
+                    # Create a nice info box
+                    with st.container():
+                        st.markdown("---")
+                        
+                        # Server status with colored indicator
+                        if health_info.get("status") == "healthy":
+                            st.markdown("🟢 **Server Status:** Healthy")
+                        else:
+                            st.markdown(f"🟡 **Server Status:** {health_info.get('status', 'unknown')}")
+                        
+                        # Database info in columns
+                        info_col1, info_col2 = st.columns(2)
+                        
+                        with info_col1:
+                            if health_info.get("database_loaded"):
+                                entries = health_info.get('total_entries', 0)
+                                st.metric(
+                                    label="📊 Database Entries", 
+                                    value=f"{entries:,}"
+                                )
+                            else:
+                                st.metric(
+                                    label="📊 Database Status", 
+                                    value="Not Loaded"
+                                )
+                        
+                        with info_col2:
+                            last_page = health_info.get("last_page_url")
+                            if last_page:
+                                # Extract just the page title from URL
+                                page_title = last_page.split("/")[-1].replace("_", " ")
+                                if len(page_title) > 20:
+                                    page_title = page_title[:20] + "..."
+                                st.metric(
+                                    label="📄 Last Page", 
+                                    value=page_title
+                                )
+                        
+                        # Optional: Show raw data in a clean expander
+                        with st.expander("🔍 View Technical Details"):
+                            st.json(health_info)
+                        
+                        st.markdown("---")
 
     path = "face_embeddings.json"
 
