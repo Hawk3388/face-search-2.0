@@ -148,11 +148,10 @@ def server(encodings):
 
 # Check API health
 def check_api_health():
-    if not API_URL or not TOKEN:
+    if not API_URL:
         return False
     try:
-        headers = {'Authorization': f'Bearer {TOKEN}'}
-        response = requests.get(f"{API_URL}/health", headers=headers, timeout=5)
+        response = requests.get(f"{API_URL}/health", timeout=20)
         return response.status_code == 200
     except Exception:
         return False
@@ -183,14 +182,12 @@ def main():
             st.info(f"💻 Using local database ({len(db) if 'db' in locals() else 0} entries)")
         else:
             st.error("❌ No local database found and API server is not reachable!")
-            st.stop()
             use_server = False
     elif local_available:
         use_server = False
         st.info(f"💻 Using local database ({len(db) if 'db' in locals() else 0} entries)")
     else:
         st.error("❌ No database file found and no API configured!")
-        st.stop()
         use_server = False
 
     uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"])
