@@ -213,27 +213,49 @@ def main():
     if 'show_health_info' not in st.session_state:
         st.session_state.show_health_info = False
     
-    # Health info button (compact design)
-    col1, col2, col3 = st.columns([1, 2, 1])
+    # Health info section with better layout
+    st.markdown("---")
+    col1, col2, col3 = st.columns([2, 1, 2])
     with col2:
-        if st.button("ℹ️ Health Info", help="Show database statistics", use_container_width=False):
+        health_button = st.button("📊 Database Info", 
+                                help="Show database statistics", 
+                                type="secondary",
+                                use_container_width=True)
+        if health_button:
             st.session_state.show_health_info = not st.session_state.show_health_info
     
-    # Show health info if button was clicked
+    # Show health info if button was clicked and database is available
     if st.session_state.show_health_info and local_available:
         health_info = get_health_info()
-        with st.container():
-            st.markdown("""
-            <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin: 10px 0; border-left: 4px solid #1f77b4;">
-                <small><strong>📊 Database Health</strong><br>
-                Entries: {entries}<br>
-                Last Page: <a href="{last_page}" target="_blank" style="color: #1f77b4; text-decoration: none;">{last_page_short}</a></small>
+        
+        # Create a nice info box
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 15px 0;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        ">
+            <h4 style="margin: 0 0 10px 0;">📊 Database Health</h4>
+            <div style="display: flex; justify-content: space-around; flex-wrap: wrap;">
+                <div style="margin: 5px;">
+                    <strong>{health_info["entries"]}</strong><br>
+                    <small>Entries</small>
+                </div>
+                <div style="margin: 5px;">
+                    <strong><a href="{health_info["last_page"]}" target="_blank" style="color: #ffd700; text-decoration: none;">
+                        {health_info["last_page"].split("/")[-1] if health_info["last_page"] != "Unknown" else "Unknown"}
+                    </a></strong><br>
+                    <small>Last Page</small>
+                </div>
             </div>
-            """.format(
-                entries=health_info["entries"],
-                last_page=health_info["last_page"],
-                last_page_short=health_info["last_page"].split("/")[-1] if health_info["last_page"] != "Unknown" else "Unknown"
-            ), unsafe_allow_html=True)
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("---")
 
     uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"])
 
