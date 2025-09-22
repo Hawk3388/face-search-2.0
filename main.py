@@ -193,7 +193,38 @@ def main():
                 st.session_state.health_info = get_health_info()
                 st.session_state.show_health = True
 
-    # Display health info if available and should be shown
+    path = "face_embeddings.json"
+
+    if os.path.exists(path):
+        db = load_database(path)
+
+    # Determine mode automatically
+    local_available = os.path.exists(path)
+    
+    if API_URL and TOKEN:
+        # Only check API health if no local DB is available
+        api_available = check_api_health()
+        if api_available:
+            use_server = True
+            st.info("🌐 Using API server (all uploaded images are deleted immediately after usage)")
+        else:
+            st.error("❌ No local database found and API server is not reachable!")
+            use_server = False
+    elif local_available:
+        use_server = False
+        st.info(f"💻 Using local database ({len(db) if 'db' in locals() else 0} entries)")
+    else:
+        st.error("❌ No database file found and no API configured!")
+        st.stop()
+        use_server = False
+
+    uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"])
+
+    # Hide health info whenever an image is uploaded (any image)
+    if uploaded_file is not None:
+        st.session_state.show_health = False
+
+    # Display health info if available and should be shown (AFTER file uploader check)
     if st.session_state.show_health and st.session_state.health_info:
         health_info = st.session_state.health_info
         
@@ -236,42 +267,11 @@ def main():
                         if len(page_title) > 20:
                             page_title = page_title[:20] + "..."
                         st.metric(
-                            label="📄 Last Crawled Page", 
+                            label="📄 Last Page", 
                             value=page_title
                         )
                 
                 st.markdown("---")
-
-    path = "face_embeddings.json"
-
-    if os.path.exists(path):
-        db = load_database(path)
-
-    # Determine mode automatically
-    local_available = os.path.exists(path)
-    
-    if API_URL and TOKEN:
-        # Only check API health if no local DB is available
-        api_available = check_api_health()
-        if api_available:
-            use_server = True
-            st.info("🌐 Using API server (all uploaded images are deleted immediately after usage)")
-        else:
-            st.error("❌ No local database found and API server is not reachable!")
-            use_server = False
-    elif local_available:
-        use_server = False
-        st.info(f"💻 Using local database ({len(db) if 'db' in locals() else 0} entries)")
-    else:
-        st.error("❌ No database file found and no API configured!")
-        st.stop()
-        use_server = False
-
-    uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"])
-
-    # Hide health info whenever an image is uploaded (any image)
-    if uploaded_file is not None:
-        st.session_state.show_health = False
 
     if uploaded_file:
         
