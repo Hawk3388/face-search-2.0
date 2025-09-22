@@ -269,11 +269,9 @@ def main():
 
     uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"])
 
-    # Reset health display when new image is uploaded
+    # Hide health info whenever an image is uploaded (any image)
     if uploaded_file is not None:
-        if 'last_uploaded_file' not in st.session_state or st.session_state.last_uploaded_file != uploaded_file.name:
-            st.session_state.show_health = False
-            st.session_state.last_uploaded_file = uploaded_file.name
+        st.session_state.show_health = False
 
     if uploaded_file:
         
