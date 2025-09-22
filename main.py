@@ -236,7 +236,7 @@ def main():
                         if len(page_title) > 20:
                             page_title = page_title[:20] + "..."
                         st.metric(
-                            label="📄 Last Page", 
+                            label="📄 Last Crawled Page", 
                             value=page_title
                         )
                 
