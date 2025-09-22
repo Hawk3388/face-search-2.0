@@ -157,10 +157,60 @@ def check_api_health():
     except Exception:
         return False
 
+# Get detailed health information
+def get_health_info():
+    """Get detailed server health information"""
+    if not API_URL:
+        return None
+    try:
+        headers = {}
+        if TOKEN:
+            headers['Authorization'] = f'Bearer {TOKEN}'
+        response = requests.get(f"{API_URL}/health", headers=headers, timeout=5)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return {"error": f"HTTP {response.status_code}", "status": "error"}
+    except Exception as e:
+        return {"error": str(e), "status": "error"}
+
 def main():
     # App
     st.set_page_config(page_title="Face Search", layout="centered")
     st.title("🔍 Face Search")
+
+    # Health Check Section
+    st.sidebar.header("🏥 Server Health")
+    if st.sidebar.button("Check Server Health"):
+        with st.sidebar:
+            with st.spinner("Checking server health..."):
+                health_info = get_health_info()
+                
+                if health_info is None:
+                    st.error("❌ No API URL configured")
+                elif "error" in health_info:
+                    st.error(f"❌ Server Error: {health_info['error']}")
+                else:
+                    # Display health information
+                    if health_info.get("status") == "healthy":
+                        st.success("✅ Server is healthy!")
+                    else:
+                        st.warning(f"⚠️ Server status: {health_info.get('status', 'unknown')}")
+                    
+                    # Display database info
+                    if health_info.get("database_loaded"):
+                        st.info(f"📊 Database loaded: **{health_info.get('total_entries', 0):,}** entries")
+                    else:
+                        st.warning("⚠️ Database not loaded")
+                    
+                    # Display last processed page
+                    last_page = health_info.get("last_page_url")
+                    if last_page:
+                        st.info(f"📄 Last processed page: {last_page}")
+                    
+                    # Show raw response (expandable)
+                    with st.expander("Show raw health data"):
+                        st.json(health_info)
 
     path = "face_embeddings.json"
 
