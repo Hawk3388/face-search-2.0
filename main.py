@@ -174,22 +174,24 @@ def get_api_stats():
 def main():
     # App
     st.set_page_config(page_title="Face Search", layout="centered")
-    st.title("🔍 Face Search")
-
-    # Add stats button in the top right corner
-    col1, col2, col3 = st.columns([4, 1, 1])
-    with col3:
-        if st.button("📊 Stats", help="View database statistics"):
+    
+    # Header with stats in a more elegant way
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.title("🔍 Face Search")
+    with col2:
+        with st.popover("📊 Stats", help="Database statistics"):
             # Try to get stats from API first, then fallback to local
             stats = get_api_stats()
             if stats:
-                st.success("📊 **API Database Stats**")
-                st.metric("Total Entries", f"{stats.get('total_entries', 'N/A'):,}")
+                st.markdown("### 🌐 API Database")
+                st.metric("Entries", f"{stats.get('total_entries', 'N/A'):,}")
                 if 'last_crawled_page' in stats:
                     page_name = stats['last_crawled_page'].split("/")[-1].replace("_", " ")
-                    st.write(f"**Last Crawled:** `{page_name}`")
-                    st.markdown(f"🔗 [View Page]({stats['last_crawled_page']})")
+                    st.caption(f"Last: {page_name}")
+                    st.link_button("🔗 View Page", stats['last_crawled_page'])
             else:
+                st.markdown("### 💻 Local Database")
                 # Fallback to local stats
                 path = "face_embeddings.json"
                 if os.path.exists(path):
@@ -197,20 +199,19 @@ def main():
                         with open(path, "r") as f:
                             db = json.load(f)
                         entry_count = len(db)
-                        st.info("💻 **Local Database Stats**")
-                        st.metric("Total Entries", f"{entry_count:,}")
+                        st.metric("Entries", f"{entry_count:,}")
                     except:
-                        st.error("❌ Could not load local database")
+                        st.error("❌ Error loading DB")
                 
                 # Check last crawled page locally
                 try:
                     with open("last_crawled_page.txt", "r") as f:
                         last_page = f.read().strip()
                     page_name = last_page.split("/")[-1].replace("_", " ")
-                    st.write(f"**Last Crawled:** `{page_name}`")
-                    st.markdown(f"🔗 [View Page]({last_page})")
+                    st.caption(f"Last: {page_name}")
+                    st.link_button("🔗 View Page", last_page)
                 except:
-                    st.write("**Last Crawled:** `No data`")
+                    st.caption("Last: No data")
 
     path = "face_embeddings.json"
 
