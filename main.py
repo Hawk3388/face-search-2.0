@@ -153,7 +153,8 @@ def check_api_health():
     try:
         response = requests.get(f"{API_URL}/health", timeout=20)
         return response.status_code == 200
-    except Exception:
+    except Exception as e:
+        print(f"Health check failed: {e}")  # Debug info
         return False
 
 def main():
