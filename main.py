@@ -193,8 +193,15 @@ def main():
                 st.session_state.health_info = get_health_info()
                 st.session_state.show_health = True
 
-    # Display health info directly under the button
-    if st.session_state.show_health and st.session_state.health_info:
+    # File uploader FIRST
+    uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"])
+    
+    # Hide health info when image is uploaded
+    if uploaded_file is not None:
+        st.session_state.show_health = False
+
+    # Display health info directly under the button (only when no file uploaded)
+    if st.session_state.show_health and st.session_state.health_info and uploaded_file is None:
         health_info = st.session_state.health_info
         
         if health_info is None:
@@ -248,53 +255,6 @@ def main():
     # Hide health info when image is uploaded
     if uploaded_file is not None:
         st.session_state.show_health = False
-        st.rerun()  # Force immediate refresh
-        health_info = st.session_state.health_info
-        
-        if health_info is None:
-            st.error("❌ No API URL configured")
-        elif "error" in health_info:
-            st.error(f"❌ Server Error: {health_info['error']}")
-        else:
-            # Create a nice info box
-            with st.container():
-                st.markdown("---")
-                
-                # Server status with colored indicator
-                if health_info.get("status") == "healthy":
-                    st.markdown("🟢 **Server Status:** Healthy")
-                else:
-                    st.markdown(f"🟡 **Server Status:** {health_info.get('status', 'unknown')}")
-                
-                # Database info in columns
-                info_col1, info_col2 = st.columns(2)
-                
-                with info_col1:
-                    if health_info.get("database_loaded"):
-                        entries = health_info.get('total_entries', 0)
-                        st.metric(
-                            label="📊 Database Entries", 
-                            value=f"{entries:,}"
-                        )
-                    else:
-                        st.metric(
-                            label="📊 Database Status", 
-                            value="Not Loaded"
-                        )
-                
-                with info_col2:
-                    last_page = health_info.get("last_page_url")
-                    if last_page:
-                        # Extract just the page title from URL
-                        page_title = last_page.split("/")[-1].replace("_", " ")
-                        if len(page_title) > 20:
-                            page_title = page_title[:20] + "..."
-                        st.metric(
-                            label="📄 Last Page", 
-                            value=page_title
-                        )
-                
-                st.markdown("---")
 
     path = "face_embeddings.json"
 
