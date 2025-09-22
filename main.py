@@ -193,11 +193,10 @@ def main():
             use_server = True
             st.info("🌐 Using API server (all uploaded images are deleted immediately after usage)")
             
-            # Show health button in sidebar only if button should be visible
+            # Show health button in MAIN area only if button should be visible
             if st.session_state.show_health_button:
-                with st.sidebar:
-                    health_button_clicked = st.button("🏥 API Health Check", key="health_btn")
-                
+                health_button_clicked = st.button("🏥 API Health Check", key="health_btn")
+            
                 # Show health details in MAIN area when button is clicked
                 if health_button_clicked:
                     st.subheader("🏥 API Health Status")
