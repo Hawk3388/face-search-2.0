@@ -22,6 +22,7 @@ import json
 from collections import deque
 from io import BytesIO
 from PIL import Image
+import numpy as np
 import imagehash
 import shutil
 import signal
@@ -690,9 +691,13 @@ def compare_hashes(phash):
     return False
 
 def is_duplicate_image_and_face(phash, encoding):
-    """Check if image/face is exact duplicate using hash index for fast lookup."""
+    """
+    Check if image/face is exact duplicate using optimized hash-based lookup.
+    Uses same logic as clean_db.py: exact hash match + exact embedding match.
+    """
+    
     phash_str = str(phash)
-    query_embedding = encoding  # Keep as list for exact comparison
+    query_embedding = np.array(encoding)  # Convert to numpy for exact comparison
     
     # First check: Hash must match exactly
     if phash_str not in hash_index:
@@ -700,14 +705,18 @@ def is_duplicate_image_and_face(phash, encoding):
     
     # Second check: Only compare embeddings for entries with matching hash
     for entry in hash_index[phash_str]:
-        if entry.get("embedding") == query_embedding:  # Exact embedding comparison
+        stored_embedding = np.array(entry.get("embedding", []))
+        # Exact 1:1 embedding comparison using numpy
+        if np.array_equal(query_embedding, stored_embedding):
             return True
     
     # Also check current article data for entries not yet in hash index
     for entry in current_article_data:
-        if (entry["phash"] == phash_str and 
-            entry["embedding"] == query_embedding):  # Exact comparison
-            return True
+        if entry["phash"] == phash_str:
+            stored_embedding = np.array(entry["embedding"])
+            # Exact 1:1 embedding comparison using numpy
+            if np.array_equal(query_embedding, stored_embedding):
+                return True
     
     return False
 

@@ -7,14 +7,20 @@ from io import BytesIO
 import requests
 import os
 
-# Load configuration from Streamlit secrets
-try:
-    API_URL = st.secrets["API_URL"]
-    TOKEN = st.secrets["TOKEN"]
-except KeyError as e:
-    st.error(f"Missing configuration in Streamlit secrets: {e}")
-    API_URL = None
-    TOKEN = None
+if os.path.exists(".env"):
+    from dotenv import load_dotenv
+    load_dotenv()
+    API_URL = os.getenv("API_URL")
+    TOKEN = os.getenv("TOKEN")
+else:
+    # Load configuration from Streamlit secrets
+    try:
+        API_URL = st.secrets["API_URL"]
+        TOKEN = st.secrets["TOKEN"]
+    except KeyError as e:
+        st.error(f"Missing configuration in Streamlit secrets: {e}")
+        API_URL = None
+        TOKEN = None
 
 # Load embedding database
 def load_database(path="face_embeddings.json"):

@@ -37,8 +37,8 @@ def create_backup(original_file):
 
 def find_exact_duplicates(database):
     """
-    Finds exact duplicates: first by hash (exact match), then by encoding if hash matches
-    Uses the same logic as the crawler for consistency
+    Finds exact duplicates using optimized hash-based grouping
+    Much faster than O(n²) comparison - groups by hash first, then compares embeddings
     
     Args:
         database: List of database entries
@@ -47,8 +47,9 @@ def find_exact_duplicates(database):
         List of duplicate groups, where each group is a list of exact duplicates
     """
     import numpy as np
+    from collections import defaultdict
     
-    print(f"🔍 Searching for exact duplicates (hash = 0, then encoding <= 0.05)")
+    print(f"🔍 Searching for exact duplicates (optimized hash grouping)")
     
     # Collect all valid entries with hashes and encodings
     print("📋 Loading and validating data...")
@@ -70,52 +71,68 @@ def find_exact_duplicates(database):
         print("❌ Not enough valid entries for comparison")
         return []
     
-    print("🚀 Comparing entries for exact duplicates...")
+    print("🚀 Grouping by hash (O(n) instead of O(n²))...")
+    
+    # Group entries by hash (much faster than comparing all pairs)
+    hash_groups = defaultdict(list)
+    for entry in valid_entries:
+        # Convert hash to string for dictionary key
+        hash_key = str(entry["phash"])
+        hash_groups[hash_key].append(entry)
+    
+    # Only process groups with multiple entries
+    potential_duplicates = {k: v for k, v in hash_groups.items() if len(v) > 1}
+    
+    print(f"📊 Hash analysis:")
+    print(f"   - Unique hashes: {len(hash_groups)}")
+    print(f"   - Hashes with duplicates: {len(potential_duplicates)}")
+    print(f"   - Total entries to check: {sum(len(group) for group in potential_duplicates.values())}")
+    
+    if not potential_duplicates:
+        print("🎉 No hash duplicates found!")
+        return []
+    
+    print("🔍 Checking embeddings for hash duplicates...")
     
     duplicate_groups = []
-    processed_indices = set()
-    total_comparisons = 0
-    hash_matches = 0
     encoding_matches = 0
+    total_embedding_comparisons = 0
     
-    for i, entry1 in enumerate(valid_entries):
-        if entry1["index"] in processed_indices:
+    for hash_key, entries in potential_duplicates.items():
+        if len(entries) < 2:
             continue
-            
-        current_group = [entry1]
-        processed_indices.add(entry1["index"])
         
-        for j in range(i + 1, len(valid_entries)):
-            entry2 = valid_entries[j]
-            if entry2["index"] in processed_indices:
+        # For each hash group, find embedding duplicates
+        processed_in_group = set()
+        
+        for i, entry1 in enumerate(entries):
+            if i in processed_in_group:
                 continue
-                
-            total_comparisons += 1
             
-            # First check: exact hash match
-            hash_distance = entry1["phash"] - entry2["phash"]
-            if hash_distance == 0:  # Exact hash match
-                hash_matches += 1
+            current_group = [entry1]
+            processed_in_group.add(i)
+            
+            for j in range(i + 1, len(entries)):
+                if j in processed_in_group:
+                    continue
                 
-                # Second check: encoding similarity for exact duplicates
-                embedding_distance = np.linalg.norm(entry1["embedding"] - entry2["embedding"])
-                if embedding_distance <= 0.05:  # Very strict threshold for exact duplicates
+                entry2 = entries[j]
+                total_embedding_comparisons += 1
+                
+                # Check embedding equality
+                if np.array_equal(entry1["embedding"], entry2["embedding"]):
                     encoding_matches += 1
                     current_group.append(entry2)
-                    processed_indices.add(entry2["index"])
-        
-        if len(current_group) > 1:
-            duplicate_groups.append(current_group)
-        
-        # Progress indicator
-        if (i + 1) % 1000 == 0:
-            print(f"Progress: {i+1}/{len(valid_entries)} entries processed")
+                    processed_in_group.add(j)
+            
+            if len(current_group) > 1:
+                duplicate_groups.append(current_group)
     
     print(f"✅ Finished! {len(duplicate_groups)} exact duplicate groups found")
     print(f"📊 Statistics:")
-    print(f"   - Total comparisons: {total_comparisons:,}")
-    print(f"   - Hash matches (exact): {hash_matches}")
-    print(f"   - Encoding matches (≤0.05): {encoding_matches}")
+    print(f"   - Embedding comparisons: {total_embedding_comparisons:,} (vs {len(valid_entries)*(len(valid_entries)-1)//2:,} in O(n²))")
+    print(f"   - Speedup factor: ~{(len(valid_entries)*(len(valid_entries)-1)//2) // max(1, total_embedding_comparisons):.1f}x")
+    print(f"   - Encoding matches (exact 1:1): {encoding_matches}")
     print(f"   - Final duplicates: {sum(len(group) for group in duplicate_groups)}")
     
     return duplicate_groups
@@ -207,8 +224,8 @@ def interactive_duplicate_removal():
     print("🤖 INTERAKTIVE DUPLIKAT-BEREINIGUNG")
     print("=" * 50)
     print("ℹ️ Hinweis: Das Tool sucht jetzt nach exakten Duplikaten")
-    print("   - Hash: Exakte Übereinstimmung (Hamming-Distanz = 0)")
-    print("   - Encoding: Sehr ähnlich (Distanz ≤ 0.05)")
+    print("   - Hash: Exakte Übereinstimmung (direkter Vergleich)")
+    print("   - Encoding: Exakte 1:1 Übereinstimmung (direkter Array-Vergleich)")
     
     # Strategie abfragen
     while True:

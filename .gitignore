@@ -11,3 +11,4 @@ wider/
 *.pth
 .env*
 föhn_ideen.txt
+*.tar.gz
