@@ -227,7 +227,7 @@ def main():
     # Determine mode automatically
     local_available = os.path.exists(path)
     
-    if API_URL and TOKEN:
+    if API_URL:
         # Only check API health if no local DB is available
         api_available = check_api_health()
         if api_available:

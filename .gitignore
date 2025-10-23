@@ -12,3 +12,4 @@ wider/
 .env*
 föhn_ideen.txt
 *.tar.gz
+*.bat
