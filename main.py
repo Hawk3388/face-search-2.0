@@ -26,21 +26,43 @@ else:
 def load_database(path="face_embeddings.json"):
     try:
         with open(path, "r") as f:
-            return json.load(f)
+            data = json.load(f)
+        
+        # Convert embeddings to numpy arrays once during load (float32 for memory efficiency)
+        for entry in data:
+            if isinstance(entry["embedding"], list):
+                entry["embedding"] = np.array(entry["embedding"], dtype=np.float32)
+        
+        return data
     except Exception as e:
         st.error(f"Error loading database: {e}")
         return []
 
-# Compare embedding with all known faces
-def find_matches(query_embedding, db, tolerance=0.5):
-    matches = []
-    for entry in db:
-        db_embedding = np.array(entry["embedding"])
-        distance = np.linalg.norm(query_embedding - db_embedding)
-        if distance <= tolerance:
-            matches.append((entry, distance))
-    matches.sort(key=lambda x: x[1])  # sort by similarity
-    return matches
+# Optimized vectorized search - 10-50x faster than loop
+def find_matches(query_embedding, db, tolerance=0.5, max_results=10):
+    if not db:
+        return []
+    
+    # Convert query to float32 to match database
+    query_embedding = query_embedding.astype(np.float32)
+    
+    # Stack all embeddings into a single matrix for vectorized computation
+    db_embeddings = np.vstack([entry["embedding"] for entry in db])
+    
+    # Compute all distances at once (much faster than loop)
+    distances = np.linalg.norm(db_embeddings - query_embedding, axis=1)
+    
+    # Filter by tolerance and get indices
+    valid_indices = np.where(distances <= tolerance)[0]
+    
+    if len(valid_indices) == 0:
+        return []
+    
+    # Sort by distance and take top results
+    sorted_indices = valid_indices[np.argsort(distances[valid_indices])][:max_results]
+    
+    # Return results
+    return [(db[i], float(distances[i])) for i in sorted_indices]
 
 def draw_face_boxes(image, face_locations):
     """Draw boxes around detected faces"""
@@ -116,7 +138,7 @@ def server(encodings):
                 st.error("😕 No similar faces found.")
             else:
                 st.success(f"✅ {len(results)} matches found!")
-                for match in results[:10]:  # show top 10
+                for match in results:  # show all results
                     # Handle different response formats from server
                     if isinstance(match, list) and len(match) >= 2:
                         # Format: [entry_dict, distance]
@@ -233,14 +255,18 @@ def main():
         if api_available:
             use_server = True
             st.info("🌐 Using API server (all uploaded images are deleted immediately after usage)")
+        elif local_available:
+            use_server = False
+            st.info(f"💻 Using local database ({len(db) if 'db' in locals() else 0} entries)")
         else:
             st.error("❌ No local database found and API server is not reachable!")
+            st.stop()
             use_server = False
     elif local_available:
         use_server = False
         st.info(f"💻 Using local database ({len(db) if 'db' in locals() else 0} entries)")
     else:
-        st.error("❌ No database file found and no API configured!")
+        st.error("❌ No local database found and API server is not reachable!")
         st.stop()
         use_server = False
 
@@ -264,9 +290,9 @@ def main():
         # Always show image with face detection boxes
         if face_locations:
             image_with_boxes = draw_face_boxes(image, face_locations)
-            st.image(image_with_boxes, caption=f"Uploaded image - {len(face_locations)} face(s) detected", use_container_width=True)
+            st.image(image_with_boxes, caption=f"Uploaded image - {len(face_locations)} face(s) detected", width='stretch')
         else:
-            st.image(uploaded_file, caption="Uploaded image - No faces detected", use_container_width=True)
+            st.image(uploaded_file, caption="Uploaded image - No faces detected", width='stretch')
 
         if not encodings:
             st.warning("❌ No face detected in the image.")

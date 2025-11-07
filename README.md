@@ -109,6 +109,10 @@ You can download the latest pre-trained model from the [GitHub Releases](https:/
 
 ## ⚠️ Important Notes
 
+**The first iteration of the crawler terminated at 07.11.2025 15:00**
+
+The database currently contains all entries collected up to this point. Future updates and iterations may follow.
+
 ### Privacy
 
 - Only use images of people who have consented
