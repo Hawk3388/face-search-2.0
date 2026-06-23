@@ -23,6 +23,7 @@ else:
         TOKEN = None
 
 # Load embedding database
+@st.cache_data(show_spinner="Loading database into memory...")
 def load_database(path="face_embeddings.json"):
     try:
         with open(path, "r") as f:
@@ -105,21 +106,11 @@ def serverless(encodings, db):
     else:
         st.success(f"✅ {len(results)} matches found!")
         for entry, dist in results[:10]:  # show top 10
+            # Direkt die URL an Streamlit übergeben, der Browser des Nutzers lädt dann das Bild.
+            st.image(entry['image_url'], width=250)
             st.markdown(f"**Similarity**: {dist:.4f}")
             st.markdown(f"[View image]({entry['image_url']})  \n[Visit page]({entry['page_url']})")
-            # Always try to show image, show placeholder if failed
-            try:
-                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-                response = requests.get(entry['image_url'], timeout=30, headers=headers)
-                response.raise_for_status()
-                img_bytes = response.content
-                st.image(Image.open(BytesIO(img_bytes)), width=250)
-            except Exception:
-                # Show placeholder image with error message
-                placeholder_img = Image.new('RGB', (250, 200), color='lightgray')
-                draw = ImageDraw.Draw(placeholder_img)
-                draw.text((10, 90), "Image not\navailable", fill='darkgray')
-                st.image(placeholder_img, width=250)
+            st.markdown("---")
 
 def server(encodings):
     try:
@@ -143,32 +134,23 @@ def server(encodings):
                     if isinstance(match, list) and len(match) >= 2:
                         # Format: [entry_dict, distance]
                         entry, distance = match[0], match[1]
+                        img_url = entry['image_url']
+                        # Direkt die URL an Streamlit übergeben, der Browser des Nutzers lädt dann das Bild.
+                        st.image(img_url, width=250)
                         st.markdown(f"**Distance**: {distance:.4f}")
                         st.markdown(f"[View image]({entry['image_url']})  \n[Visit page]({entry['page_url']})")
-                        img_url = entry['image_url']
                     elif isinstance(match, dict):
                         # Format: {"distance": x, "similarity": y, "image_url": z, ...}
+                        img_url = match['image_url']
+                        # Direkt die URL an Streamlit übergeben, der Browser des Nutzers lädt dann das Bild.
+                        st.image(img_url, width=250)
                         st.markdown(f"**Distance**: {match['distance']:.4f} | **Similarity**: {match['similarity']:.3f}")
                         st.markdown(f"[View image]({match['image_url']})  \n[Visit page]({match['page_url']})")
-                        img_url = match['image_url']
                     else:
                         st.warning("Unknown response format from server")
                         continue
                         
-                    # Always try to show image, show placeholder if failed
-                    try:
-                        USER_AGENT = "FaceSearchBot/1.0 (Educational Research; Contact: github.com/Hawk3388/face-search-2.0)"
-                        headers = {'User-Agent': USER_AGENT}
-                        response = requests.get(img_url, timeout=30, headers=headers)
-                        response.raise_for_status()
-                        img_bytes = response.content
-                        st.image(Image.open(BytesIO(img_bytes)), width=250)
-                    except Exception:
-                        # Show placeholder image with error message
-                        placeholder_img = Image.new('RGB', (250, 200), color='lightgray')
-                        draw = ImageDraw.Draw(placeholder_img)
-                        draw.text((10, 90), "Image not\navailable", fill='darkgray')
-                        st.image(placeholder_img, width=250)
+                    st.markdown("---")
         else:
             st.error(f"API Error: {api_response.get('error', 'Unknown error')}")
     except Exception as e:
@@ -222,9 +204,8 @@ def main():
                 path = "face_embeddings.json"
                 if os.path.exists(path):
                     try:
-                        with open(path, "r") as f:
-                            db = json.load(f)
-                        entry_count = len(db)
+                        db_temp = load_database(path)
+                        entry_count = len(db_temp)
                         st.write(f"**Entries:** {entry_count:,}")
                     except:
                         st.write("**Entries:** Error loading DB")
@@ -243,32 +224,33 @@ def main():
 
     path = "face_embeddings.json"
 
-    if os.path.exists(path):
-        db = load_database(path)
-
     # Determine mode automatically
     local_available = os.path.exists(path)
+    use_server = False
+    api_available = False
     
     if API_URL:
-        # Only check API health if no local DB is available
         api_available = check_api_health()
         if api_available:
             use_server = True
             st.info("🌐 Using API server (all uploaded images are deleted immediately after usage)")
         elif local_available:
             use_server = False
-            st.info(f"💻 Using local database ({len(db) if 'db' in locals() else 0} entries)")
+            st.info("💻 Using local database (Server not reachable)")
         else:
             st.error("❌ No local database found and API server is not reachable!")
             st.stop()
-            use_server = False
     elif local_available:
         use_server = False
-        st.info(f"💻 Using local database ({len(db) if 'db' in locals() else 0} entries)")
+        st.info("💻 Using local database")
     else:
         st.error("❌ No local database found and API server is not reachable!")
         st.stop()
-        use_server = False
+
+    # Load local database ONLY if we are actually using it
+    if not use_server and local_available:
+        db = load_database(path)
+        st.info(f"📊 Local Database Loaded: {len(db)} entries")
 
     uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"])
 

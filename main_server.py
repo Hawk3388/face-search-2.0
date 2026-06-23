@@ -5,7 +5,7 @@ import os
 import re
 import shutil
 import time
-import threading
+# import threading
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -37,6 +37,8 @@ def verify_token():
 
 # Global database
 db = None
+db_embeddings_matrix = None
+db_norms_sq = None
 request_count = 0
 
 def load_stats():
@@ -98,7 +100,7 @@ def close_list(file_path="face_embeddings_server.json"):
 
 def load_database():
     """Load the face embeddings database"""
-    global db
+    global db, db_embeddings_matrix, db_norms_sq
     try:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print(f"📊 [{timestamp}] Loading database...")
@@ -111,15 +113,26 @@ def load_database():
         with open('face_embeddings_server.json', 'r', encoding='utf-8') as f:
             db = json.load(f)
         
-        # Convert embeddings to numpy arrays once during load (float32 for memory efficiency)
+        # Convert embeddings to numpy arrays and build global matrix once
+        embeddings_list = []
         for entry in db:
-            if isinstance(entry["embedding"], list):
-                entry["embedding"] = np.array(entry["embedding"], dtype=np.float32)
+            emb = np.array(entry["embedding"], dtype=np.float32)
+            # Wir behalten embedding im JSON als Liste für jsonify
+            embeddings_list.append(emb)
+            
+        if embeddings_list:
+            db_embeddings_matrix = np.vstack(embeddings_list)
+            db_norms_sq = np.sum(db_embeddings_matrix ** 2, axis=1)
+        else:
+            db_embeddings_matrix = None
+            db_norms_sq = None
         
         print(f"✅ Database loaded: {len(db)} entries")
     except Exception as e:
         print(f"❌ Error loading database: {e}")
         db = []
+        db_embeddings_matrix = None
+        db_norms_sq = None
 
 def database_reload_scheduler():
     """Background thread that reloads database every 24 hours"""
@@ -131,31 +144,44 @@ def database_reload_scheduler():
     except Exception as e:
         print(f"Error in database reload scheduler: {e}")
 
-# Optimized vectorized search - 10-50x faster than loop
-def find_matches(query_embedding, db, tolerance=0.5, max_results=10):
-    if not db:
+# Optimized vectorized search
+def find_matches(query_embedding, db, db_matrix, db_norms_sq, tolerance=0.5, max_results=10):
+    if not db or db_matrix is None or db_norms_sq is None:
         return []
     
     # Convert query to float32 to match database
-    query_embedding = query_embedding.astype(np.float32)
+    query_embedding = np.asarray(query_embedding, dtype=np.float32)
     
-    # Stack all embeddings into a single matrix for vectorized computation
-    db_embeddings = np.vstack([entry["embedding"] for entry in db])
+    # 1. Use squared euclidean distance: ||a-b||^2 = ||a||^2 + ||b||^2 - 2(a.b)
+    # Matrix multiplication uses BLAS and is significantly faster than array subtraction
+    query_norm_sq = np.sum(query_embedding ** 2)
+    dot_products = np.dot(db_matrix, query_embedding)
     
-    # Compute all distances at once (much faster than loop)
-    distances = np.linalg.norm(db_embeddings - query_embedding, axis=1)
+    # Calculate squared distances (use np.maximum to avoid small negative values from floating point errors)
+    squared_distances = np.maximum(0, db_norms_sq + query_norm_sq - 2 * dot_products)
+    tolerance_sq = tolerance ** 2
     
-    # Filter by tolerance and get indices
-    valid_indices = np.where(distances <= tolerance)[0]
+    # 2. Filter by tolerance and get indices
+    valid_indices = np.where(squared_distances <= tolerance_sq)[0]
     
     if len(valid_indices) == 0:
         return []
+        
+    valid_distances = squared_distances[valid_indices]
     
-    # Sort by distance and take top results
-    sorted_indices = valid_indices[np.argsort(distances[valid_indices])][:max_results]
+    # 3. Use argpartition for O(n) partial sort instead of O(n log n) full sort
+    if len(valid_indices) > max_results:
+        # Get the top K smallest distances (unordered)
+        top_k_idx = np.argpartition(valid_distances, max_results - 1)[:max_results]
+        # Sort just the top K to have them strictly ordered
+        top_k_sorted_idx = top_k_idx[np.argsort(valid_distances[top_k_idx])]
+        sorted_indices = valid_indices[top_k_sorted_idx]
+    else:
+        # If fewer than max_results, just sort them all
+        sorted_indices = valid_indices[np.argsort(valid_distances)]
     
-    # Return results
-    return [(db[i], float(distances[i])) for i in sorted_indices]
+    # Return results, taking the square root only for the final matched distances
+    return [(db[i], float(np.sqrt(squared_distances[i]))) for i in sorted_indices]
 
 def extract_last_page_url(file_path, max_read_bytes=50000):
     """
@@ -210,7 +236,7 @@ def search_faces():
             return jsonify({'error': 'Invalid encoding format (must be 128-dimensional array)'}), 400
         
         # Search for matches
-        matches = find_matches(encoding, db)
+        matches = find_matches(encoding, db, db_embeddings_matrix, db_norms_sq)
         
         return jsonify({
             'success': True,
@@ -251,9 +277,9 @@ if __name__ == '__main__':
     load_stats()
     
     # Start background thread for database reloading every 24h
-    reload_thread = threading.Thread(target=database_reload_scheduler, daemon=True)
-    reload_thread.start()
-    print("⏰ Database auto-reload scheduled every 24 hours")
+    # reload_thread = threading.Thread(target=database_reload_scheduler, daemon=True)
+    # reload_thread.start()
+    # print("⏰ Database auto-reload scheduled every 24 hours")
     
     # Run server
     port = int(os.environ.get('PORT', 7403))
