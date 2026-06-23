@@ -156,16 +156,6 @@ def server(encodings):
     except Exception as e:
         st.error(f"Error contacting API: {e}")
 
-# Check API health
-def check_api_health():
-    if not API_URL:
-        return False
-    try:
-        response = requests.get(f"{API_URL}/health", timeout=20)
-        return response.status_code == 200
-    except Exception:
-        return False
-
 # Get database stats from health endpoint
 def get_health_stats():
     if not API_URL:
@@ -181,6 +171,8 @@ def get_health_stats():
 def main():
     # App
     st.set_page_config(page_title="Face Search", layout="centered")
+
+    api_available = False
     
     # Header with stats in a more elegant way
     col1, col2 = st.columns([3, 1])
@@ -192,6 +184,7 @@ def main():
             api_health_data = get_health_stats()
             
             if api_health_data:
+                api_available = True
                 st.markdown("**🌐 API Database**")
                 st.write(f"**Entries:** {api_health_data.get('total_entries', 'N/A'):,}")
                 if 'last_page_url' in api_health_data:
@@ -227,10 +220,8 @@ def main():
     # Determine mode automatically
     local_available = os.path.exists(path)
     use_server = False
-    api_available = False
     
     if API_URL:
-        api_available = check_api_health()
         if api_available:
             use_server = True
             st.info("🌐 Using API server (all uploaded images are deleted immediately after usage)")
