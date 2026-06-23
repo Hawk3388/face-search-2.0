@@ -41,6 +41,8 @@ USER_AGENT = "FaceSearchBot/1.0 (Educational Research; Contact: github.com/Hawk3
 consecutive_429_errors = 0
 MAX_CONSECUTIVE_429 = 10  # Stop after 10 consecutive 429 errors
 
+robots_cache = {}
+
 model = None
 
 # Check for LOW_RAM environment variable to disable PyTorch model
@@ -114,18 +116,20 @@ else:
 # Robots.txt parser
 def check_robots_txt(url):
     """Checks if the URL is allowed according to robots.txt."""
-    # Wikipedia and Wikimedia are always allowed
-    if "wikipedia.org" in url or "wikimedia.org" in url or "wikipedia" in url:
-        return True
-    else:
-        try:
+    try:
+        domain = urllib.parse.urlparse(url).netloc
+
+        if domain not in robots_cache:
             rp = urllib.robotparser.RobotFileParser()
-            rp.set_url(urllib.parse.urljoin(url, '/robots.txt'))
+            rp.set_url(f"https://{domain}/robots.txt")
             rp.read()
-            return rp.can_fetch(USER_AGENT, url)
-        except:
-            # On errors reading robots.txt - allow access
-            return True
+            robots_cache[domain] = rp
+
+        return robots_cache[domain].can_fetch(USER_AGENT, url)
+
+    except Exception as e:
+        print(f"robots.txt error: {e}")
+        return True
 
 queue = deque()  # Global queue for signal handler
 
@@ -436,28 +440,34 @@ def is_internal_link(base_url, link):
         return base_domain == link_domain or link_domain == ""
 
 def download_image(img_url):
+    def skip(reason, url):
+        print(f"SKIPPED [{reason}]")
+        print(url)
+        return None
+    
     global consecutive_429_errors
     
     # Only allow compatible image formats
     allowed_exts = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
     if not any(img_url.lower().endswith(ext) for ext in allowed_exts):
         print(f"Skipping incompatible image format: {img_url}")
-        return None
+        return skip("EXTENSION", img_url)
     if ".svg" in img_url.lower():
         print(f"Skipping incompatible image format: {img_url}")
-        return None
+        return skip("EXTENSION", img_url)
     if img_url.lower().endswith("wikipedia.png"):
         print(f"Skipping Wikipedia logo: {img_url}")
-        return None
+        return skip("WIKIPEDIA_LOGO", img_url)
     
     # Maximum 3 attempts per image
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):
         try:
             # Respect robots.txt
-            if not check_robots_txt(img_url):
-                print(f"⚠️ robots.txt forbids access to: {img_url}")
-                return None
+            if "upload.wikimedia.org" not in img_url:
+                if not check_robots_txt(img_url):
+                    print(f"⚠️ robots.txt forbids access to: {img_url}")
+                    return skip("ROBOTS", img_url)
             
             headers = {
                 "User-Agent": USER_AGENT,
@@ -472,18 +482,18 @@ def download_image(img_url):
             
             # Size check before complete download
             content_length = response.headers.get('content-length')
-            if content_length and int(content_length) > 2 * 1024 * 1024:  # 2MB
+            if content_length and int(content_length) > 50 * 1024 * 1024:  # 50MB
                 print(f"⚠️ Image too large ({int(content_length)/1024/1024:.1f}MB): {img_url}")
-                return None
+                return skip("SIZE", img_url)
             
             # Complete download
             image_bytes = response.content
             response.close()  # Close response immediately
             
-            if len(image_bytes) > 2 * 1024 * 1024:
+            if len(image_bytes) > 50 * 1024 * 1024:
                 size_mb = len(image_bytes) / 1024 / 1024
                 print(f"⚠️ Image too large ({size_mb:.1f}MB): {img_url}")
-                return None
+                return skip("SIZE", img_url)
             
             # Reduce image size to save memory (for low RAM systems)
             try:
@@ -892,93 +902,76 @@ def get_current_category_pages_url(last_pages, num_threads=8):
 
         cmcontinue = data["continue"]["cmcontinue"]
 
-def get_articles_from_single_category_page(category_url):
-    """Collects all articles from a single category page."""
-    # Infinite retry loop - never give up!
+def get_articles_from_category_api(category_url, limit=500):
+    """
+    Ersatz für get_articles_from_single_category_page().
+    Gibt exakt (page_articles, next_category_url) zurück.
+    """
+    
+    url = "https://en.wikipedia.org/w/api.php"
+
+    # cmcontinue aus der "Kategorie-URL" auslesen
+    parsed = urllib.parse.urlparse(category_url)
+    query = urllib.parse.parse_qs(parsed.query)
+
+    cmcontinue = query.get("cmcontinue", [None])[0]
+
+    params = {
+        "action": "query",
+        "list": "categorymembers",
+        "cmtitle": "Category:Living people",
+        "cmnamespace": 0,
+        "cmtype": "page",
+        "cmlimit": limit,
+        "format": "json"
+    }
+
+    if cmcontinue:
+        params["cmcontinue"] = cmcontinue
+
+    headers = {
+        "User-Agent": USER_AGENT
+    }
+
     while True:
         try:
-            print(f"Loading articles from category page: {category_url}")
-            headers = {
-                "User-Agent": USER_AGENT
-            }
-            resp = requests.get(category_url, timeout=60, headers=headers)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
-            
-            # Ethical crawling: respect crawl delay
-            time.sleep(CRAWL_DELAY)
-            
-            page_articles = []
-            
-            # Collect links to person articles
-            content_div = soup.find("div", {"id": "mw-content-text"})
-            if content_div:
-                links = content_div.find_all("a", href=lambda x: x and x.startswith("/wiki/") and ":" not in x.split("/wiki/")[1])
-                for link in links:
-                    article_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
-                    page_articles.append(article_url)
-            
-            # Find next category page URL (robust search)
-            next_category_url = None
-            
-            # Method 1: Search for "(next page)" link
-            next_links = soup.find_all("a", string=lambda text: text and text.strip() == "(next page)")
-            if next_links:
-                next_page_link = next_links[0]
-                if next_page_link.get('href'):
-                    next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", next_page_link['href'])
-                    print(f"    Next-page link found: {next_page_link.get('href')}")
-            
-            # Method 2: Fallback - Search for link with "next" text  
-            if not next_category_url:
-                all_links = soup.find_all("a", href=True)
-                for link in all_links:
-                    link_text = link.get_text().strip().lower()
-                    if "next page" in link_text or link_text == "next":
-                        next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
-                        print(f"    Fallback next-link found: {link['href']}")
-                        break
-            
-            # Method 3: Search for pagefrom parameter in URLs
-            if not next_category_url:
-                pagefrom_links = soup.find_all("a", href=lambda x: x and "pagefrom=" in x)
-                if pagefrom_links:
-                    # Filter links that come after the current page
-                    for link in pagefrom_links:
-                        if "(next page)" in str(link.parent) or "next" in link.get_text().lower():
-                            next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
-                            print(f"    Pagefrom next-link found: {link['href']}")
-                            break
-                    # If no explicit "next" text, take the first pagefrom link
-                    if not next_category_url and pagefrom_links:
-                        next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", pagefrom_links[0]['href'])
-                        print(f"    First pagefrom-link found: {pagefrom_links[0]['href']}")
-            
-            # Method 4: Search in navigation elements
-            if not next_category_url:
-                nav_elements = soup.find_all(['div', 'span'], class_=lambda x: x and ('mw-category-group' in x or 'pager' in x))
-                for nav in nav_elements:
-                    links = nav.find_all("a", href=True)
-                    for link in links:
-                        if "pagefrom=" in link.get('href', ''):
-                            next_category_url = urllib.parse.urljoin("https://en.wikipedia.org", link['href'])
-                            print(f"    Navigation next-link found: {link['href']}")
-                            break
-                    if next_category_url:
-                        break
-            
-            if next_category_url:
-                print(f"✓ {len(page_articles)} articles loaded from this category page, next page available")
-            else:
-                print(f"✓ {len(page_articles)} articles loaded from this category page, no further page found")
-            
-            return page_articles, next_category_url
-            
+            r = requests.get(
+                url,
+                params=params,
+                headers=headers,
+                timeout=60
+            )
+            r.raise_for_status()
+            data = r.json()
+            break
+
         except Exception as e:
-            print(f"⚠️ Network error while loading category page {category_url}: {e}")
-            print("⏳ Waiting 60 seconds and retrying...")
+            print(f"⚠️ API error: {e}")
+            print("Waiting 60 seconds...")
             time.sleep(60)
-            # Loop continues - never give up!
+
+    page_articles = []
+
+    for item in data["query"]["categorymembers"]:
+        page_articles.append(
+            "https://en.wikipedia.org/wiki/" +
+            item["title"].replace(" ", "_")
+        )
+
+    # Nächste "Kategorie-Seite" simulieren
+    next_category_url = None
+
+    if "continue" in data:
+        next_cmcontinue = data["continue"]["cmcontinue"]
+
+        next_category_url = (
+            "https://en.wikipedia.org/w/index.php?"
+            "title=Category:Living_people&"
+            "cmcontinue=" +
+            urllib.parse.quote(next_cmcontinue)
+        )
+
+    return page_articles, next_category_url
 
 def is_page_already_crawled(page_url):
     """Da wir keine Datei lesen - immer False (keine Duplikate erkennen)."""
@@ -1044,7 +1037,7 @@ def thread_wiki(current_category_url, i):
         print(f"\n--- Processing category page: {current_category_url} ---")
         
         # Load articles from current category page
-        page_articles, next_category_url = get_articles_from_single_category_page(current_category_url)
+        page_articles, next_category_url = get_articles_from_category_api(current_category_url)
         
         if not page_articles:
             print("No articles found on this page - going to next")
@@ -1164,14 +1157,17 @@ def crawl_images():
         print("Starting new crawling session (append-only)...")
     
     # Determine current category page URL
-    current_category_url = wikipedia_url_to_category_link(last_page)
+    if last_page:
+        current_category_url = wikipedia_url_to_category_link(last_page)
+    else:
+        current_category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
     print(f"Current category page URL: {current_category_url}")
     
     while current_category_url:
         print(f"\n--- Processing category page: {current_category_url} ---")
         
         # Load articles from current category page
-        page_articles, next_category_url = get_articles_from_single_category_page(current_category_url)
+        page_articles, next_category_url = get_articles_from_category_api(current_category_url)
         
         if not page_articles:
             print("No articles found on this page - going to next")
@@ -1284,6 +1280,28 @@ def process_images_in_article(images, url):
         if not img_url:
             continue
         img_url = urllib.parse.urljoin(url, img_url)
+        if "/thumb/" in img_url:
+            parts = img_url.split("/thumb/")
+
+            if len(parts) == 2:
+                thumb_path = parts[1]
+
+                segments = thumb_path.split("/")
+
+                if len(segments) >= 4:
+                    original_filename = segments[-2]
+
+                    img_url = (
+                        parts[0]
+                        + "/"
+                        + "/".join(segments[:-2])
+                        + "/"
+                        + original_filename
+                    )
+
+        if "upload.wikimedia.org" not in img_url:
+            continue
+
         process_single_image(img_url, url)
 
 def process_single_image(img_url, page_url):
