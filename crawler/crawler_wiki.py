@@ -33,17 +33,23 @@ USER_AGENT = "FaceSearchBot/1.0 (Educational Research; Contact: github.com/Hawk3
 # Global counter for consecutive 429 errors
 consecutive_429_errors = 0
 MAX_CONSECUTIVE_429 = 10  # Stop after 10 consecutive 429 errors
+robots_cache = {}
 
 # Robots.txt parser for Wikipedia
 def check_robots_txt(url):
-    """Checks if the URL is allowed according to robots.txt."""
     try:
-        rp = urllib.robotparser.RobotFileParser()
-        rp.set_url(urllib.parse.urljoin(url, '/robots.txt'))
-        rp.read()
-        return rp.can_fetch(USER_AGENT, url)
-    except:
-        # On errors reading robots.txt - allow access
+        domain = urllib.parse.urlparse(url).netloc
+
+        if domain not in robots_cache:
+            rp = urllib.robotparser.RobotFileParser()
+            rp.set_url(f"https://{domain}/robots.txt")
+            rp.read()
+            robots_cache[domain] = rp
+
+        return robots_cache[domain].can_fetch(USER_AGENT, url)
+
+    except Exception as e:
+        print(f"robots.txt error: {e}")
         return True
 
 queue = deque()  # Global queue for signal handler
@@ -262,19 +268,24 @@ def is_internal_link(base_url, link):
         return base_domain == link_domain or link_domain == ""
 
 def download_image(img_url):
+    def skip(reason, url):
+        print(f"SKIPPED [{reason}]")
+        print(url)
+        return None
+
     global consecutive_429_errors
     
     # Only allow compatible image formats
     allowed_exts = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
     if not any(img_url.lower().endswith(ext) for ext in allowed_exts):
         print(f"Skipping incompatible image format: {img_url}")
-        return None
+        return skip("EXTENSION", img_url)
     if ".svg" in img_url.lower():
         print(f"Skipping incompatible image format: {img_url}")
-        return None
+        return skip("EXTENSION", img_url)
     if img_url.lower().endswith("wikipedia.png"):
         print(f"Skipping Wikipedia logo: {img_url}")
-        return None
+        return skip("WIKIPEDIA_LOGO", img_url)
     
     # Maximum 3 attempts per image
     max_attempts = 3
@@ -283,7 +294,7 @@ def download_image(img_url):
             # Respect robots.txt
             if not check_robots_txt(img_url):
                 print(f"⚠️ robots.txt forbids access to: {img_url}")
-                return None
+                return skip("ROBOTS", img_url)
             
             headers = {
                 "User-Agent": USER_AGENT,
@@ -300,7 +311,7 @@ def download_image(img_url):
             content_length = response.headers.get('content-length')
             if content_length and int(content_length) > 2 * 1024 * 1024:  # 2MB
                 print(f"⚠️ Image too large ({int(content_length)/1024/1024:.1f}MB): {img_url}")
-                return None
+                return skip("SIZE", img_url)
             
             # Complete download
             image_bytes = response.content
@@ -698,6 +709,28 @@ def crawl_images():
                 if not img_url:
                     continue
                 img_url = urllib.parse.urljoin(url, img_url)
+                
+                if "/thumb/" in img_url:
+                    parts = img_url.split("/thumb/")
+
+                    if len(parts) == 2:
+                        thumb_path = parts[1]
+
+                        segments = thumb_path.split("/")
+
+                        if len(segments) >= 4:
+                            original_filename = segments[-2]
+
+                            img_url = (
+                                parts[0]
+                                + "/"
+                                + "/".join(segments[:-2])
+                                + "/"
+                                + original_filename
+                            )
+
+                if "upload.wikimedia.org" not in img_url:
+                    continue
 
                 image_bytes = download_image(img_url)
                 if not image_bytes:
