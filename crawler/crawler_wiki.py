@@ -12,6 +12,7 @@ import shutil
 from dotenv import load_dotenv
 import signal
 import sys
+import re
 import gc  # For garbage collection
 import time  # For error waiting times
 import urllib.robotparser  # For robots.txt respect
@@ -158,13 +159,59 @@ def get_last_category_page():
         print(f"Error reading last category page: {e}")
     return None
 
-def save_last_category_page(page_url, category_url):
-    """Saves the current category page URL to a small separate file."""
+
+def get_last_crawled_page():
+    """Reads the last crawled article from a small separate file (compat with threaded crawler)."""
     try:
-        with open("last_category_page.txt", "w", encoding="utf-8") as f:
-            json.dump({"category_url": category_url, "last_article_url": page_url}, ensure_ascii=False)
+        if os.path.exists("last_crawled_page.txt"):
+            with open("last_crawled_page.txt", "r", encoding="utf-8") as f:
+                content = f.read()
+                if content is None:
+                    return None
+                last_page = content.strip()
+                if last_page:
+                    print(f"📄 Last crawled article: {last_page}")
+                    return last_page
     except Exception as e:
-        print(f"Error saving last category page: {e}")
+        print(f"Error reading last crawled page: {e}")
+    return None
+
+
+def wikipedia_url_to_category_link(article_url, category="Living people"):
+    """
+    Convert a Wikipedia article URL into a category page URL with a pagefrom parameter
+    so crawling can resume close to that article instead of starting from the beginning.
+    """
+    # Title from URL
+    title = article_url.split("/")[-1]
+    title = title.replace("_", " ")
+
+    # Remove parenthetical disambiguation like " (volleyball)"
+    title = re.sub(r"\s*\([^)]*\)", "", title).strip()
+
+    parts = title.split(" ")
+    if len(parts) == 1:
+        lastname = parts[0]
+        firstname = ""
+    else:
+        lastname = parts[-1]
+        firstname = " ".join(parts[:-1])
+
+    pagefrom_raw = f"{lastname}, {firstname}\n{title}"
+    pagefrom_encoded = urllib.parse.quote_plus(pagefrom_raw)
+
+    category_url = (
+        f"https://en.wikipedia.org/w/index.php?title=Category:{category.replace(' ', '_')}&pagefrom={pagefrom_encoded}#mw-pages"
+    )
+    return category_url
+
+def save_last_crawled_page(page_url):
+    """Saves the current article URL to a small separate file."""
+    try:
+        with open("last_crawled_page.txt", "w", encoding="utf-8") as f:
+            f.write(page_url)
+    except Exception as e:
+        print(f"Error saving last page: {e}")
 
 def signal_handler(sig, frame):
     """Handler for interrupt signals (Ctrl+C)."""
@@ -522,59 +569,40 @@ def crawl_images():
     global queue, current_article_data
     processed_count = 0
     entries_saved = 0
-    
-    # Determine current category page URL
-    current_category_url, last_page = get_last_category_page()
+    current_category_url = None
 
-    if current_category_url:
-        print("📄 Resuming from saved category page")
+
+    # Fall back to threaded-crawler style resume file
+    last_article = get_last_crawled_page()
+    if last_article:
+        current_category_url = wikipedia_url_to_category_link(last_article)
+        print("📄 Resuming from last crawled article via category link")
     else:
         print("🚀 Starting from first category page")
         current_category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
-
+        
+        
     while current_category_url:
         print(f"\n--- Processing category page: {current_category_url} ---")
-        
+
         # Load articles from current category page
         page_articles, next_category_url = get_articles_from_single_category_page(current_category_url)
-        
+
         if not page_articles:
             print("No articles found on this page - going to next")
             current_category_url = next_category_url
             continue
-        
+
         # Fill queue with articles from this category page
         queue = deque(page_articles)
-        
-        # If we have a resume point, skip all articles up to last + 1
-        if last_page:
-            articles_to_skip = []
-            found_last_page = False
-            
-            for article in page_articles:
-                if article == last_page:
-                    found_last_page = True
-                    print(f"🎯 Last article found: {article} - skipping up to here")
-                    break
-                else:
-                    articles_to_skip.append(article)
-            
-            if found_last_page:
-                # Skip all articles up to the last one (inclusive)
-                for _ in range(len(articles_to_skip) + 1):  # +1 to skip the last article itself
-                    if queue:
-                        queue.popleft()
-                print(f"⏭️ {len(articles_to_skip) + 1} already processed articles skipped")
-                # Reset last_page after successful resume
-                last_page = None
-        
+
         remaining_articles = len(queue)
         print(f"Processing {remaining_articles} remaining articles from this category page")
-        
+
         # Process articles from current category page
         while queue:
             url = queue.popleft()
-                
+
             processed_count += 1
             print(f"Crawling page: {url} (#{processed_count})")
 
@@ -590,7 +618,7 @@ def crawl_images():
                         }
                         resp = requests.get(url, timeout=60, headers=headers)
                         resp.raise_for_status()
-                        
+
                         # Ethical crawling: respect crawl delay
                         time.sleep(CRAWL_DELAY)
                         break  # Successfully loaded, exit retry loop
@@ -612,7 +640,7 @@ def crawl_images():
                 if not img_url:
                     continue
                 img_url = urllib.parse.urljoin(url, img_url)
-                
+
                 if "/thumb/" in img_url:
                     parts = img_url.split("/thumb/")
 
@@ -638,10 +666,10 @@ def crawl_images():
                 image_bytes = download_image(img_url)
                 if not image_bytes:
                     continue
-                    
+
                 try:
                     image = face_recognition.load_image_file(BytesIO(image_bytes))
-                    
+
                     if image_bytes_contains_face(image):
                         if not compare_hashes(get_phash(image_bytes)):
                             process_image(image, image_bytes, img_url, url)
@@ -649,36 +677,36 @@ def crawl_images():
                             print(f"Image already present in current article: {img_url}")
                     else:
                         print(f"No face found: {img_url}")
-                        
+
                     # Explicitly free memory
                     del image, image_bytes
-                    
+
                 except Exception as e:
                     print(f"Error loading image {img_url}: {e}")
                     continue
-            
+
             # Save results for this article (only if data exists)
             if current_article_data:
                 entries_saved += len(current_article_data)
                 save_database()
-                
+
             # Save last crawled article (for resume function)
-            save_last_category_page(url, current_category_url)
+            save_last_crawled_page(url)
 
             # Regular garbage collection every 10 articles to avoid memory leaks
             if processed_count % 10 == 0:
                 gc.collect()
                 print(f"🧹 Garbage collection performed after {processed_count} articles")
-        
-        # Go to next category page
-        print(f"✓ Category page completed. Processed articles: {processed_count}")
-            
-        current_category_url = next_category_url
-        if not current_category_url:
-            print("⚠️ No more category pages found - starting from beginning...")
-            # Instead of stopping, start from the beginning
-            current_category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
-            time.sleep(300)  # Wait 5 minutes before restart
+
+            # Go to next category page
+            print(f"✓ Category page completed. Processed articles: {processed_count}")
+
+            current_category_url = next_category_url
+            if not current_category_url:
+                print("⚠️ No more category pages found - starting from beginning...")
+                # Instead of stopping, start from the beginning
+                current_category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
+                time.sleep(300)  # Wait 5 minutes before restart
 
     print(f"Crawling completed. {entries_saved} new entries added to database.")
 
