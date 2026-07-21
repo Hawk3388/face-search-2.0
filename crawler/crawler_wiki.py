@@ -349,13 +349,13 @@ def download_image(img_url):
             
             # Size check before complete download
             content_length = response.headers.get('content-length')
-            if content_length and int(content_length) > 50 * 1024 * 1024:  # 50MB
+            if content_length and int(content_length) > 10 * 1024 * 1024:  # 10MB
                 print(f"⚠️ Image too large ({int(content_length)/1024/1024:.1f}MB): {img_url}")
                 return skip("SIZE", img_url)
             
             # Complete download
             image_bytes = response.content
-            if len(image_bytes) > 50 * 1024 * 1024:
+            if len(image_bytes) > 10 * 1024 * 1024:
                 size_mb = len(image_bytes) / 1024 / 1024
                 print(f"⚠️ Image too large ({size_mb:.1f}MB): {img_url}")
                 return None
@@ -565,14 +565,43 @@ def get_articles_from_single_category_page(category_url):
             time.sleep(60)
             # Loop continues - never give up!
 
+def get_original_image_url(filename):
+    """
+    Holt die Original-Bild-URL einer Wikipedia-Datei über die MediaWiki API.
+    filename: z.B. "File:Albert_Einstein_1921.jpg"
+    """
+
+    api = "https://en.wikipedia.org/w/api.php"
+    params = {
+        "action": "query",
+        "titles": filename,
+        "prop": "imageinfo",
+        "iiprop": "url",
+        "format": "json"
+    }
+
+    try:
+        data = requests.get(api, params=params, timeout=30).json()
+    except Exception as e:
+        print(f"⚠️ API error for {filename}: {e}")
+        return None
+
+    pages = data.get("query", {}).get("pages", {})
+
+    for page in pages.values():
+        if "imageinfo" in page:
+            return page["imageinfo"][0]["url"]
+
+    return None
+
+
 def crawl_images():
     global queue, current_article_data
     processed_count = 0
     entries_saved = 0
     current_category_url = None
 
-
-    # Fall back to threaded-crawler style resume file
+    # Resume logic
     last_article = get_last_crawled_page()
     if last_article:
         current_category_url = wikipedia_url_to_category_link(last_article)
@@ -580,12 +609,10 @@ def crawl_images():
     else:
         print("🚀 Starting from first category page")
         current_category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
-        
-        
+
     while current_category_url:
         print(f"\n--- Processing category page: {current_category_url} ---")
 
-        # Load articles from current category page
         page_articles, next_category_url = get_articles_from_single_category_page(current_category_url)
 
         if not page_articles:
@@ -593,47 +620,87 @@ def crawl_images():
             current_category_url = next_category_url
             continue
 
-        # Fill queue with articles from this category page
         queue = deque(page_articles)
-
         remaining_articles = len(queue)
         print(f"Processing {remaining_articles} remaining articles from this category page")
 
-        # Process articles from current category page
         while queue:
             url = queue.popleft()
+
+            if url == "https://en.wikipedia.org/wiki/Family_name":
+                continue
 
             processed_count += 1
             print(f"Crawling page: {url} (#{processed_count})")
 
-            # Clear current article data for this article
             current_article_data.clear()
 
+            # Load article with retry
             try:
-                # Infinite retry loop for network errors
                 while True:
                     try:
-                        headers = {
-                            "User-Agent": USER_AGENT
-                        }
+                        headers = {"User-Agent": USER_AGENT}
                         resp = requests.get(url, timeout=60, headers=headers)
                         resp.raise_for_status()
-
-                        # Ethical crawling: respect crawl delay
                         time.sleep(CRAWL_DELAY)
-                        break  # Successfully loaded, exit retry loop
+                        break
                     except Exception as e:
                         print(f"⚠️ Network error while loading page {url}: {e}")
                         print("⏳ Waiting 30 seconds and retrying...")
                         time.sleep(30)
-                        # Retry loop continues - never give up!
             except Exception as e:
                 print(f"Unexpected error while loading page {url}: {e}")
                 continue
 
             soup = BeautifulSoup(resp.text, "html.parser")
 
-            # Bilder finden und herunterladen
+            # ------------------------------------------------------------
+            # 🔥 NEU: Datei-Links extrahieren (findet ALLE Bilder)
+            # ------------------------------------------------------------
+            file_links = [
+                a.get("href")
+                for a in soup.find_all("a")
+                if a.get("href", "").startswith("/wiki/File:")
+            ]
+
+            # ------------------------------------------------------------
+            # 🔥 NEU: Originalbilder über MediaWiki API holen
+            # ------------------------------------------------------------
+            for link in file_links:
+                filename = link.split("/wiki/")[1]
+                original_url = get_original_image_url(filename)
+
+                if not original_url:
+                    continue
+
+                # Nur echte Fotos behalten
+                if not original_url.lower().endswith((".jpg", ".jpeg", ".png")):
+                    continue
+
+                image_bytes = download_image(original_url)
+                if not image_bytes:
+                    continue
+
+                try:
+                    image = face_recognition.load_image_file(BytesIO(image_bytes))
+
+                    if image_bytes_contains_face(image):
+                        if not compare_hashes(get_phash(image_bytes)):
+                            process_image(image, image_bytes, original_url, url)
+                        else:
+                            print(f"Image already present in current article: {original_url}")
+                    else:
+                        print(f"No face found: {original_url}")
+
+                    del image, image_bytes
+
+                except Exception as e:
+                    print(f"Error loading image {original_url}: {e}")
+                    continue
+
+            # ------------------------------------------------------------
+            # Dein alter IMG-Tag-Code bleibt bestehen (Backup)
+            # ------------------------------------------------------------
             images = soup.find_all("img")
             for img in images:
                 img_url = img.get("src")
@@ -643,15 +710,11 @@ def crawl_images():
 
                 if "/thumb/" in img_url:
                     parts = img_url.split("/thumb/")
-
                     if len(parts) == 2:
                         thumb_path = parts[1]
-
                         segments = thumb_path.split("/")
-
                         if len(segments) >= 4:
                             original_filename = segments[-2]
-
                             img_url = (
                                 parts[0]
                                 + "/"
@@ -678,35 +741,30 @@ def crawl_images():
                     else:
                         print(f"No face found: {img_url}")
 
-                    # Explicitly free memory
                     del image, image_bytes
 
                 except Exception as e:
                     print(f"Error loading image {img_url}: {e}")
                     continue
 
-            # Save results for this article (only if data exists)
+            # Save results
             if current_article_data:
                 entries_saved += len(current_article_data)
                 save_database()
 
-            # Save last crawled article (for resume function)
             save_last_crawled_page(url)
 
-            # Regular garbage collection every 10 articles to avoid memory leaks
             if processed_count % 10 == 0:
                 gc.collect()
                 print(f"🧹 Garbage collection performed after {processed_count} articles")
 
-            # Go to next category page
             print(f"✓ Category page completed. Processed articles: {processed_count}")
 
             current_category_url = next_category_url
             if not current_category_url:
                 print("⚠️ No more category pages found - starting from beginning...")
-                # Instead of stopping, start from the beginning
                 current_category_url = "https://en.wikipedia.org/wiki/Category:Living_people"
-                time.sleep(300)  # Wait 5 minutes before restart
+                time.sleep(300)
 
     print(f"Crawling completed. {entries_saved} new entries added to database.")
 

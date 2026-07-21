@@ -3,7 +3,7 @@ test*
 dlib/
 *.bak
 last_crawled_page.txt
-images/
+*images/
 commands.txt
 __pycache__/
 *.zip
