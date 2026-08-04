@@ -14,3 +14,4 @@ föhn_ideen.txt
 *.tar.gz
 *.bat
 stats.txt
+*.db*
