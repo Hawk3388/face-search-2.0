@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify
+from fastapi import FastAPI, Header
+from fastapi.responses import JSONResponse
 import sqlite3
 import numpy as np
 import os
@@ -8,8 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-app = Flask(__name__)
-app.config["JSON_SORT_KEYS"] = False
+app = FastAPI(title="Face Search SQLite API")
 
 AUTH_TOKEN = os.getenv("TOKEN")
 
@@ -23,11 +23,11 @@ db_norms_sq = None
 request_count = 0
 
 
-def verify_token():
+def verify_token(authorization_header):
     if not AUTH_TOKEN:
         return True
 
-    token = request.headers.get("Authorization")
+    token = authorization_header
     if not token:
         return False
 
@@ -264,52 +264,52 @@ def find_matches(query_embedding,
 
     return deduplicate_results(results)
 
-@app.route("/search", methods=["POST"])
-def search_faces():
+@app.post("/search")
+async def search_faces(payload: dict, authorization: str | None = Header(default=None, alias="Authorization")):
     try:
 
-        if not verify_token():
-            return jsonify({
+        if not verify_token(authorization):
+            return JSONResponse(status_code=401, content={
                 "error": "Unauthorized"
-            }), 401
+            })
 
         increment_request_count()
 
-        data = request.get_json()
+        data = payload
 
         if not data:
-            return jsonify({
+            return JSONResponse(status_code=400, content={
                 "error": "No JSON data"
-            }), 400
+            })
 
         encoding = data.get("encoding")
 
         if encoding is None:
-            return jsonify({
+            return JSONResponse(status_code=400, content={
                 "error": "Missing encoding"
-            }), 400
+            })
 
         if not isinstance(encoding, list) or len(encoding) != 128:
-            return jsonify({
+            return JSONResponse(status_code=400, content={
                 "error": "Encoding must contain 128 values"
-            }), 400
+            })
 
-        matches = find_matches(encoding)
+        matches = await find_matches(encoding)
 
-        return jsonify({
+        return {
             "success": True,
             "matches": matches,
             "total_results": len(matches)
-        })
+        }
 
     except Exception as e:
         print(e)
-        return jsonify({
+        return JSONResponse(status_code=500, content={
             "error": str(e)
-        }), 500
+        })
 
 
-@app.route("/health", methods=["GET"])
+@app.get("/health")
 def health():
 
     conn = get_connection()
@@ -327,21 +327,21 @@ def health():
 
     row = cur.fetchone()
 
-    return jsonify({
+    return {
         "status": "healthy",
         "database_loaded": db_embeddings_matrix is not None,
         "total_entries": total,
         "last_page_url": row[0] if row else None
-    })
+    }
 
 
-@app.route("/stats", methods=["GET"])
-def stats():
+@app.get("/stats")
+def stats(authorization: str | None = Header(default=None, alias="Authorization")):
 
-    if not verify_token():
-        return jsonify({
+    if not verify_token(authorization):
+        return JSONResponse(status_code=401, content={
             "error": "Unauthorized"
-        }), 401
+        })
 
     conn = get_connection()
     cur = conn.cursor()
@@ -352,37 +352,41 @@ def stats():
     cur.execute("SELECT COUNT(*) FROM wiki_pages")
     total_pages = cur.fetchone()[0]
 
-    return jsonify({
+    return {
         "total_images": total_images,
         "total_pages": total_pages,
         "database_size": os.path.getsize(DB_FILE),
         "requests": request_count
-    })
+    }
 
 
-@app.route("/reload", methods=["POST"])
-def reload_database():
+@app.post("/reload")
+def reload_database(authorization: str | None = Header(default=None, alias="Authorization")):
 
-    if not verify_token():
-        return jsonify({
+    if not verify_token(authorization):
+        return JSONResponse(status_code=401, content={
             "error": "Unauthorized"
-        }), 401
+        })
 
     load_database()
 
-    return jsonify({
+    return {
         "success": True,
         "entries": len(db)
-    })
+    }
 
 
-if __name__ == "__main__":
-
+@app.on_event("startup")
+def startup_event():
     load_stats()
     load_database()
 
+
+if __name__ == "__main__":
+    import uvicorn
+
     port = int(os.getenv("PORT", 7403))
-    debug = os.getenv("FLASK_ENV") == "development"
+    reload_server = os.getenv("FLASK_ENV") == "development" or os.getenv("FASTAPI_ENV") == "development"
 
     print(f"SQLite-Datei: {DB_FILE}")
     print(f"Geladene Bilder: {len(db)}")
@@ -393,8 +397,9 @@ if __name__ == "__main__":
     else:
         print("⚠️ Keine Authentifizierung")
 
-    app.run(
+    uvicorn.run(
+        "main_server_sql:app",
         host="0.0.0.0",
         port=port,
-        debug=debug
+        reload=reload_server
     )

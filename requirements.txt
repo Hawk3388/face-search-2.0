@@ -15,6 +15,7 @@ dill==0.3.8
 dlib-bin==19.24.6
 face_recognition @ git+https://github.com/thetoby9944/face_recognition.git@d632e2e8d5b5b286d944c333f3ff4433dafabb19
 face_recognition_models==0.3.0
+fastapi==0.141.1
 filelock==3.19.1
 frozenlist==1.7.0
 fsspec==2025.3.0

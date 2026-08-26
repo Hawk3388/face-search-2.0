@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify
+from fastapi import FastAPI, Header
+from fastapi.responses import JSONResponse
 import numpy as np
 import json
 import os
@@ -12,27 +13,26 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-app = Flask(__name__)
-app.config['JSON_SORT_KEYS'] = False
+app = FastAPI(title="Face Search API")
 
 # Get authentication token from environment
 AUTH_TOKEN = os.getenv('TOKEN')
 if not AUTH_TOKEN:
     print("⚠️ WARNING: No TOKEN found in environment variables. Server will be publicly accessible!")
 
-def verify_token():
+def verify_token(authorization_header):
     """Verify authentication token from request headers"""
     if not AUTH_TOKEN:
         return True  # If no token is configured, allow access
-    
-    token = request.headers.get('Authorization')
+
+    token = authorization_header
     if not token:
         return False
-    
+
     # Remove "Bearer " prefix if present
     if token.startswith('Bearer '):
         token = token[7:]
-    
+
     return token == AUTH_TOKEN
 
 # Global database
@@ -211,79 +211,83 @@ def extract_last_page_url(file_path, max_read_bytes=50000):
         print(f"Error: {e}")
         return None
 
-@app.route('/search', methods=['POST'])
-def search_faces():
+@app.post('/search')
+async def search_faces(payload: dict, authorization: str | None = Header(default=None, alias='Authorization')):
     """Search for similar faces using face encoding"""
     try:
         # Verify authentication
-        if not verify_token():
-            return jsonify({'error': 'Unauthorized: Invalid or missing token'}), 401
+        if not verify_token(authorization):
+            return JSONResponse(status_code=401, content={'error': 'Unauthorized: Invalid or missing token'})
         
         # Increment request counter
         increment_request_count()
         
         # Get request data
-        data = request.get_json()
+        data = payload
         if not data:
-            return jsonify({'error': 'No JSON data provided'}), 400
+            return JSONResponse(status_code=400, content={'error': 'No JSON data provided'})
         
         # Validate embedding
         encoding = data.get('encoding')
-        if not encoding:
-            return jsonify({'error': 'Missing face encoding'}), 400
+        if encoding is None:
+            return JSONResponse(status_code=400, content={'error': 'Missing face encoding'})
         
         if not isinstance(encoding, list) or len(encoding) != 128:
-            return jsonify({'error': 'Invalid encoding format (must be 128-dimensional array)'}), 400
+            return JSONResponse(status_code=400, content={'error': 'Invalid encoding format (must be 128-dimensional array)'})
         
         # Search for matches
-        matches = find_matches(encoding, db, db_embeddings_matrix, db_norms_sq)
+        matches = await find_matches(encoding, db, db_embeddings_matrix, db_norms_sq)
         
-        return jsonify({
+        return {
             'success': True,
             'matches': matches,
             'total_results': len(matches),
-        })
+        }
         
     except Exception as e:
         print(f"❌ Search error: {e}")
-        return jsonify({'error': 'Internal server error'}), 500
+        return JSONResponse(status_code=500, content={'error': 'Internal server error'})
 
-@app.route('/health', methods=['GET'])
+@app.get('/health')
 def health_check():
     """Health check endpoint"""
-    return jsonify({
+    return {
         'status': 'healthy',
         'database_loaded': db is not None,
         'total_entries': len(db) if db else 0,
         'last_page_url': extract_last_page_url('face_embeddings_server.json'),
-    })
+    }
 
-@app.route('/stats', methods=['GET'])
-def get_stats():
+@app.get('/stats')
+def get_stats(authorization: str | None = Header(default=None, alias='Authorization')):
     """Get database and request statistics"""
     # Verify authentication for stats endpoint
-    if not verify_token():
-        return jsonify({'error': 'Unauthorized: Invalid or missing token'}), 401
+    if not verify_token(authorization):
+        return JSONResponse(status_code=401, content={'error': 'Unauthorized: Invalid or missing token'})
         
-    return jsonify({
+    return {
         'total_entries': len(db) if db else 0,
         'database_file_size': os.path.getsize('face_embeddings_server.json') if os.path.exists('face_embeddings_server.json') else 0,
         'total_requests': request_count,
-    })
+    }
 
-if __name__ == '__main__':
-    # Load database on startup
+
+@app.on_event('startup')
+def startup_event():
     load_database()
     load_stats()
-    
+
+if __name__ == '__main__':
+    import uvicorn
+
     # Start background thread for database reloading every 24h
     # reload_thread = threading.Thread(target=database_reload_scheduler, daemon=True)
     # reload_thread.start()
     # print("⏰ Database auto-reload scheduled every 24 hours")
-    
+
     # Run server
     port = int(os.environ.get('PORT', 7403))
-    debug = os.environ.get('FLASK_ENV') == 'development'
+    reload_server = os.environ.get('FLASK_ENV') == 'development' or os.environ.get('FASTAPI_ENV') == 'development'
     
     print(f"🚀 Starting Face Search API on port {port}")
     print(f"📊 Database entries: {len(db) if db else 0}")
@@ -292,5 +296,5 @@ if __name__ == '__main__':
         print(f"🔒 API is secured with token authentication")
     else:
         print(f"⚠️ API is publicly accessible (no token configured)")
-    
-    app.run(host='0.0.0.0', port=port, debug=debug)
+
+    uvicorn.run('main_server:app', host='0.0.0.0', port=port, reload=reload_server)
