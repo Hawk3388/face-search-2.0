@@ -17,7 +17,13 @@ def load_image(data, max_bytes=10 * 1024 * 1024, max_pixels=20_000_000):
             with Image.open(BytesIO(data)) as image:
                 if image.width * image.height > max_pixels:
                     raise ValueError("Image exceeds the pixel limit")
-                return np.array(ImageOps.exif_transpose(image).convert("RGB"))
+                image = ImageOps.exif_transpose(image)
+                if image.mode == "P" and "transparency" in image.info:
+                    # Expand palette alpha first; direct P -> RGB warns for byte
+                    # transparency tables. Keep the existing RGB colors (no matte)
+                    # so previously indexed embeddings remain compatible.
+                    image = image.convert("RGBA")
+                return np.array(image.convert("RGB"))
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
         raise ValueError("Invalid or excessively large image") from exc
 
