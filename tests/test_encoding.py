@@ -1,11 +1,15 @@
 from io import BytesIO
+from pathlib import Path
+import sys
+from types import SimpleNamespace
 import warnings
 
 import numpy as np
 from PIL import Image
 import pytest
 
-from face_search.encoding import load_image
+from face_search.config import Settings
+from face_search.encoding import FaceEncoder, load_image
 
 
 @pytest.mark.parametrize("transparency", [bytes([0, 128, 255]), 0, None])
@@ -36,3 +40,39 @@ def test_truecolor_loading_retains_existing_rgb_preprocessing(mode):
     stream = BytesIO()
     image.save(stream, format="PNG")
     np.testing.assert_array_equal(load_image(stream.getvalue()), np.full((2, 2, 3), color[:3], dtype=np.uint8))
+
+
+def test_extract_keeps_detection_and_encoding_contract(monkeypatch):
+    locations = [(0, 10, 10, 0)]
+    calls = []
+    image = np.zeros((10, 10, 3), dtype=np.uint8)
+
+    def detect(actual, model):
+        assert actual is image and model == "hog"
+        calls.append("detect")
+        return locations
+
+    def encode(actual, boxes, model, num_jitters):
+        assert actual is image and boxes is locations
+        assert model == "large" and num_jitters == 10
+        calls.append("encode")
+        return [np.ones(128)]
+
+    monkeypatch.setitem(
+        sys.modules, "face_recognition", SimpleNamespace(face_locations=detect, face_encodings=encode)
+    )
+    encoder = FaceEncoder(Settings(Path("unused")))
+    boxes, vectors = encoder.extract(image)
+    assert boxes == locations and len(vectors) == 1
+    assert calls == ["detect", "encode"]
+
+
+def test_detect_still_enforces_face_limit_before_encoding(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "face_recognition",
+        SimpleNamespace(face_locations=lambda *a, **k: [(0, 1, 1, 0)] * 2),
+    )
+    encoder = FaceEncoder(Settings(Path("unused"), max_faces=1))
+    with pytest.raises(ValueError, match="At most 1"):
+        encoder.extract(np.zeros((2, 2, 3), dtype=np.uint8))

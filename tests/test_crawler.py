@@ -231,10 +231,13 @@ class Encoder:
     preprocessing = "dlib-rgb-large-v1"
     dimension = 128
 
-    def extract(self, image):
+    def detect(self, image):
         if image.shape[0] < 200:
-            return [], []
-        return [(0, 100, 100, 0)], [np.ones(128)]
+            return []
+        return [(0, 100, 100, 0)]
+
+    def encode_locations(self, image, locations):
+        return [np.ones(128) for _ in locations]
 
 
 def test_preview_without_face_gets_full_resolution_fallback(store):
@@ -245,6 +248,58 @@ def test_preview_without_face_gets_full_resolution_fallback(store):
     assert len(entries) == 1
     assert quality["width"] == 400
     assert http.calls[0][0] == metadata["url"]
+
+
+@pytest.mark.parametrize(
+    "preview_boxes,larger_boxes,selected_width",
+    [
+        ([(0, 50, 50, 0)], [(0, 100, 100, 0)], 400),
+        ([(0, 50, 50, 0), (50, 100, 100, 50)], [(0, 100, 100, 0)], 100),
+        ([], [(0, 100, 100, 0)], 400),
+        ([], [], 400),
+        ([(0, 90, 90, 0)], None, 100),
+    ],
+)
+def test_encode_only_selected_resolution(store, preview_boxes, larger_boxes, selected_width):
+    class RecordingEncoder(Encoder):
+        def __init__(self):
+            self.detections = []
+            self.encodings = []
+
+        def detect(self, image):
+            self.detections.append(image.shape[1])
+            return preview_boxes if image.shape[1] == 100 else larger_boxes
+
+        def encode_locations(self, image, locations):
+            self.encodings.append((image.shape[1], list(locations)))
+            return super().encode_locations(image, locations)
+
+    encoder = RecordingEncoder()
+    http = FakeHttp([image_bytes(400)])
+    crawler = Crawler(WikiApi(http), store, encoder, Settings(store.path))
+    metadata = {**info(), "download_url": "https://upload.wikimedia.org/preview.png", "width": 400, "height": 400}
+    entries, quality = crawler.analyze(metadata, image_bytes(100))
+    selected_boxes = preview_boxes if selected_width == 100 else larger_boxes
+    assert encoder.detections == ([100] if larger_boxes is None else [100, 400])
+    assert encoder.encodings == ([(selected_width, selected_boxes)] if selected_boxes else [])
+    assert quality["width"] == selected_width
+    assert [entry["bbox"] for entry in entries] == [list(box) for box in selected_boxes]
+
+
+def test_failed_larger_download_does_not_encode_discarded_preview(store):
+    class RecordingEncoder(Encoder):
+        def detect(self, image):
+            return [(0, 50, 50, 0)]
+
+        def encode_locations(self, image, locations):
+            pytest.fail("Descriptors must wait for resolution selection")
+
+    crawler = Crawler(
+        WikiApi(FakeHttp([requests.Timeout("larger failed")])), store, RecordingEncoder(), Settings(store.path)
+    )
+    metadata = {**info(), "download_url": "https://upload.wikimedia.org/preview.png"}
+    with pytest.raises(requests.Timeout, match="larger failed"):
+        crawler.analyze(metadata, image_bytes(100))
 
 
 def test_pipeline_persists_download_failure_then_recovers_without_recrawling_article(store):
@@ -374,6 +429,112 @@ def test_downloads_overlap_and_use_only_configured_workers(store):
     assert store.counts(crawler.profile) == {"done": 6}
 
 
+def test_fast_downloads_commit_and_refill_while_first_download_is_blocked(store, monkeypatch):
+    slow_started, release_slow = threading.Event(), threading.Event()
+    fast_committed, fifth_started = threading.Event(), threading.Event()
+    observations, downloads, commits = [], [], []
+    owner = threading.get_ident()
+
+    class ControlledHttp(FakeHttp):
+        def get(self, url, **kwargs):
+            downloads.append(url)
+            if url.endswith("/0.png"):
+                slow_started.set()
+                assert release_slow.wait(10), "Slow download was never released"
+            else:
+                assert slow_started.wait(5)
+            if url.endswith("/4.png"):
+                fifth_started.set()
+            return b"downloaded image"
+
+    http = ControlledHttp()
+    crawler = Crawler(WikiApi(http), store, Encoder(), Settings(store.path), workers=2)
+    monkeypatch.setattr(crawler, "analyze", lambda info, data: ([], {}))
+    save = store.complete_image
+
+    def complete(job, entries, quality):
+        assert threading.get_ident() == owner
+        save(job, entries, quality)
+        commits.append(job["url"])
+        if not job["url"].endswith("/0.png"):
+            fast_committed.set()
+
+    monkeypatch.setattr(store, "complete_image", complete)
+    urls = [f"https://example.org/{i}.png" for i in range(8)]
+    for url in urls:
+        article(store, profile=crawler.profile, metadata={**info(), "url": url, "download_url": url})
+
+    def observe():
+        try:
+            observations.append(fast_committed.wait(5) and fifth_started.wait(5))
+        finally:
+            release_slow.set()
+
+    observer = threading.Thread(target=observe, daemon=True)
+    observer.start()
+    try:
+        with ThreadPoolExecutor(2) as pool:
+            crawler.process_images(pool)
+    finally:
+        release_slow.set()
+        observer.join(10)
+    assert observations == [True]
+    assert commits[0] != urls[0]
+    assert sorted(downloads) == urls  # Includes no duplicate of the uncommitted current job.
+    assert store.counts(crawler.profile) == {"no_faces": 8}
+
+
+def test_prefetch_stays_bounded_and_refills_before_encoding(store, monkeypatch):
+    workers = 2
+    started = []
+    window_ready = threading.Event()
+
+    class ImmediateHttp(FakeHttp):
+        def get(self, url, **kwargs):
+            started.append(url)
+            if len(started) == workers * 2 + 1:
+                window_ready.set()
+            return b"image"
+
+    crawler = Crawler(WikiApi(ImmediateHttp()), store, Encoder(), Settings(store.path), workers=workers)
+    for i in range(12):
+        url = f"https://example.org/{i:02}.png"
+        article(store, profile=crawler.profile, metadata={**info(), "url": url, "download_url": url})
+    analyzed = []
+
+    def analyze(info, data):
+        if not analyzed:
+            # The newly available slot must be filled *before* expensive analysis.
+            assert window_ready.wait(5)
+        assert len(started) <= len(analyzed) + workers * 2 + 1
+        analyzed.append(info["url"])
+        return [], {}
+
+    monkeypatch.setattr(crawler, "analyze", analyze)
+    with ThreadPoolExecutor(workers) as pool:
+        crawler.process_images(pool)
+    assert len(started) == len(set(started)) == len(analyzed) == 12
+
+
+def test_stop_while_waiting_leaves_download_jobs_pending(store, monkeypatch):
+    from crawler.wiki_api import Stopped
+
+    stop = threading.Event()
+
+    class StoppingHttp(FakeHttp):
+        def get(self, url, **kwargs):
+            stop.set()
+            return b"image"
+
+    http = StoppingHttp()
+    crawler = Crawler(WikiApi(http), store, Encoder(), Settings(store.path), workers=1, stop=stop)
+    article(store, profile=crawler.profile)
+    monkeypatch.setattr(crawler, "analyze", lambda *args: pytest.fail("No analysis after stop"))
+    with ThreadPoolExecutor(1) as pool, pytest.raises(Stopped):
+        crawler.process_images(pool)
+    assert store.counts(crawler.profile) == {"pending": 1}
+
+
 def test_stop_retains_pending_work(store):
     http = FakeHttp()
     crawler = Crawler(WikiApi(http), store, Encoder(), Settings(store.path), workers=1)
@@ -405,6 +566,7 @@ def test_server_defaults_to_sqlite_with_explicit_json_mode(monkeypatch):
 
 def test_system_trust_keeps_tls_verification_and_explicit_bundle():
     import ssl
+
     http = HttpClient("test")
     try:
         adapter = http.session().get_adapter("https://example.org")

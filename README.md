@@ -150,6 +150,14 @@ Neither threshold is claimed to be calibrated for your
 deployment. The legacy `similarity` field remains for compatibility; it is **not a
 probability**. The UI displays distance, with smaller values meaning closer matches.
 
+Search still scans every embedding for the selected model. A partial selection
+sorts only the leading candidates and expands when image duplicates consume slots;
+distance ties retain database order. Norms and boundary calculations use float64.
+Small candidate sets are reranked in float64; large sets refine near-zero distances
+and threshold boundaries in bounded chunks. This improves numerical consistency,
+including exact self-matches, without changing the configured matching threshold
+or claiming improved identity accuracy from the face model itself.
+
 ## Data protection and migration
 
 Existing databases and model weights are never automatically removed. Readers do
@@ -178,6 +186,34 @@ To restore a backup: stop readers and writers, keep the current database and its
 sidecars for diagnosis, and point `DATABASE_PATH` at the verified backup or a new
 copy of it. Do not overwrite a running SQLite database or mix old WAL files with a
 restored file. Test restoration on a separate path before deployment.
+
+### SQLite cleanup
+
+```sh
+# Read-only report (also the default when running tools/clean_db.py):
+python -m tools.clean_db --database face_embeddings.db
+# Stop database writers, then explicitly apply the reported URL-alias cleanup:
+python -m tools.clean_db --database face_embeddings.db --apply
+```
+
+The cleaner groups original/thumbnail URL aliases in a linear pass instead of
+comparing every image hash against every other hash. Identical pHashes are reported
+for review only: even equal hashes do not justify deleting a face or merging distinct
+image URLs. Ordinary URL query parameters remain significant, while recognized
+Wikimedia still-image thumbnails on both upload/thumb hosts resolve to the original.
+Document pages and video thumbnails are not collapsed to a shared file URL.
+
+`--apply` first creates a unique integrity-checked backup, migrates a legacy schema
+if needed (with its own backup), and merges URL aliases transactionally. Distinct
+face embeddings and all source page links are retained. Only identical face rows
+are deduplicated. Groups with conflicting face metadata stay separate. Extra schema
+columns or references that the cleaner cannot preserve cause an explicit failure.
+Existing crawl queues/progress are retained. No database file or backup is deleted,
+and no automatic VACUUM rewrites the file. Without `--database`, `DATABASE_PATH`
+or the project SQLite default is used. Import legacy JSON via `tools.json_to_sql`
+before cleaning; the old JSON overwrite/pHash-deletion workflow is removed.
+
+After applying cleanup, restart the server or call `/reload` to rebuild its snapshot.
 
 ## Crawling
 
@@ -212,12 +248,19 @@ run. Without `--once`, retries are checked every 30 seconds and discovery repeat
 every 24 hours by default. `--page` runs finish after the selected articles.
 
 Three download workers prefetch a bounded number of images with reusable HTTP
-sessions; MediaWiki metadata requests remain serial. Requests are paced per host;
+sessions. Completed downloads are processed in completion order, and free slots
+are refilled before face analysis so one slow download does not hold up ready images.
+At most twice the worker count is queued or downloaded ahead, plus the image being
+analyzed. In-flight URLs are excluded from rescheduling until their result or retry
+is committed; unfinished jobs remain pending after a stop. MediaWiki metadata
+requests remain serial. Requests are paced per host;
 HTTP 429/Retry-After and API maxlag cause backoff. Face extraction and SQLite writes
 use one worker, avoiding duplicated model memory and competing database writes.
 960px previews reduce transfer and detection costs. If no face or a small face is
 detected, the crawler tries the original within configured limits, or a larger
 preview. A face detected in the first pass is retained if the second finds fewer.
+Both passes only locate faces. Descriptors are computed once, using the existing
+face locations on the selected image; images without faces skip descriptor generation.
 All detected faces, bounding boxes, pixel area and crop contrast are recorded.
 Quality measurements are diagnostic values, not identity confidence scores.
 

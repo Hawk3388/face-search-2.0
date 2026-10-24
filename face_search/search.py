@@ -14,11 +14,19 @@ def normalize_image_url(url):
         return None
     parsed = urlsplit(str(url).strip())
     # Only Wikimedia has this thumbnail path convention.
-    if parsed.hostname == "upload.wikimedia.org" and "/thumb/" in parsed.path:
+    if parsed.hostname in ("upload.wikimedia.org", "thumb.wikimedia.org") and "/thumb/" in parsed.path:
         prefix, tail = parsed.path.split("/thumb/", 1)
         parts = tail.split("/")
-        if len(parts) >= 4:
-            parsed = parsed._replace(path=prefix + "/" + "/".join(parts[:-1]), query="")
+        # Multipage documents/video thumbnails may depict different pages/frames.
+        # Only collapse formats with an unambiguous original still image.
+        suffix = parts[2].rsplit(".", 1)[-1].lower() if len(parts) >= 4 else ""
+        if suffix in ("jpg", "jpeg", "png", "webp", "bmp", "svg"):
+            parsed = parsed._replace(
+                scheme=parsed.scheme or "https",
+                netloc="upload.wikimedia.org",
+                path=prefix + "/" + "/".join(parts[:-1]),
+                query="",
+            )
     return urlunsplit(parsed._replace(fragment=""))
 
 
@@ -29,9 +37,21 @@ def validate_embedding(value, dimension):
     array = array.astype(np.float32)
     if not np.isfinite(array).all() or np.max(np.abs(array), initial=0) > 1e6:
         raise ValueError("Encoding values must be finite and within [-1000000, 1000000]")
-    if np.linalg.norm(array) == 0:
+    if not np.any(array):
         raise ValueError("Encoding must not be a zero vector")
     return array
+
+
+def nearest_positions(indices, distances, count):
+    """Partial selection with deterministic row-order ties, including the cutoff."""
+    if len(indices) > count:
+        cutoff = np.partition(distances, count - 1)[count - 1]
+        below = np.flatnonzero(distances < cutoff)
+        tied = np.flatnonzero(distances == cutoff)[: count - len(below)]
+        positions = np.concatenate((below, tied))
+    else:
+        positions = np.arange(len(indices))
+    return positions[np.lexsort((indices[positions], distances[positions]))]
 
 
 @dataclass(frozen=True)
@@ -57,9 +77,9 @@ class SearchIndex:
             entries.append(entry)
             vectors.append(vector)
         matrix = np.ascontiguousarray(vectors, dtype=np.float32).reshape(-1, dimension)
-        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-        normalized = matrix / np.maximum(norms, 1e-12)
-        norms_sq = np.einsum("ij,ij->i", matrix, matrix)
+        norms_sq = np.einsum("ij,ij->i", matrix, matrix, dtype=np.float64)
+        normalized = np.empty_like(matrix)
+        np.divide(matrix, np.sqrt(norms_sq)[:, None], out=normalized)
         for array in (matrix, normalized, norms_sq):
             array.setflags(write=False)
         return cls(tuple(entries), matrix, normalized, norms_sq, model_id, dimension)
@@ -70,35 +90,72 @@ class SearchIndex:
             raise ValueError("Tolerance must be between 0 and 2")
         if isinstance(max_results, bool) or not isinstance(max_results, int) or max_results < 1:
             raise ValueError("max_results must be a positive integer")
+        query64 = query.astype(np.float64)
+        query_norm_sq = np.dot(query64, query64)
+        roundoff = 4 * (self.dimension + 4) * np.finfo(np.float32).eps
         if metric == "cosine":
-            distances = np.clip(1 - self.normalized @ (query / np.linalg.norm(query)), 0, 2)
+            unit_query = query64 / np.sqrt(query_norm_sq)
+            approximate = np.clip(1 - self.normalized @ unit_query.astype(np.float32), 0, 2)
+            indices = np.flatnonzero(approximate <= tolerance + roundoff)
+            distances = approximate[indices].astype(np.float64)
+            uncertain = (
+                np.arange(len(indices))
+                if len(indices) <= 4096
+                else np.flatnonzero((distances <= roundoff) | (np.abs(distances - tolerance) <= roundoff))
+            )
+            for start in range(0, len(uncertain), 4096):
+                positions = uncertain[start : start + 4096]
+                selected = indices[positions]
+                block = self.matrix[selected].astype(np.float64)
+                identical = np.all(block == query64, axis=1)
+                # Half the squared unit-vector distance avoids cancellation at cosine=1.
+                difference = block / np.sqrt(self.norms_sq[selected])[:, None] - unit_query
+                distances[positions] = np.clip(0.5 * np.einsum("ij,ij->i", difference, difference), 0, 2)
+                distances[positions[identical]] = 0
         elif metric == "euclidean":
-            squared = np.maximum(self.norms_sq + np.dot(query, query) - 2 * (self.matrix @ query), 0)
+            norm_sums = self.norms_sq.astype(np.float32) + np.float32(query_norm_sq)
+            approximate = np.maximum(norm_sums - 2 * (self.matrix @ query), 0)
             # Refine near zero/the decision boundary to avoid float32 cancellation
             # rejecting an exact self-match or changing a threshold decision.
-            error_bound = 16 * np.finfo(np.float32).eps * (self.norms_sq + np.dot(query, query))
-            uncertain = np.flatnonzero((squared <= error_bound) | (np.abs(squared - tolerance**2) <= error_bound))
+            error_bound = roundoff * norm_sums + self.dimension * np.finfo(np.float32).tiny
+            indices = np.flatnonzero(approximate <= tolerance**2 + error_bound)
+            squared = approximate[indices].astype(np.float64)
+            error_bound = error_bound[indices]
+            uncertain = (
+                np.arange(len(indices))
+                if len(indices) <= 4096
+                else np.flatnonzero((squared <= error_bound) | (np.abs(squared - tolerance**2) <= error_bound))
+            )
             for start in range(0, len(uncertain), 4096):
-                selected = uncertain[start : start + 4096]
+                positions = uncertain[start : start + 4096]
+                selected = indices[positions]
                 difference = self.matrix[selected].astype(np.float64) - query
-                squared[selected] = np.einsum("ij,ij->i", difference, difference)
+                squared[positions] = np.einsum("ij,ij->i", difference, difference)
             distances = np.sqrt(squared)
         else:
             raise ValueError("metric must be euclidean or cosine")
-        indices = np.flatnonzero(distances <= tolerance)
-        # Stable ordering also resolves ties at the top-k boundary.
-        indices = indices[np.argsort(distances[indices], kind="stable")]
-        results, seen = [], set()
-        for i in indices:
-            entry = self.entries[int(i)]
-            key = entry.get("image_url") or ("face", int(i))
-            if dedup and key in seen:
-                continue
-            seen.add(key)
-            distance = float(distances[i])
-            results.append(dict(entry, distance=distance, similarity=max(0.0, 1.0 - distance)))
-            if len(results) >= max_results:
+        valid = distances <= tolerance
+        indices, distances = indices[valid], distances[valid]
+        # Only sort a small leading window. Expand it if image duplicates consume
+        # slots, so deduplication never hides otherwise eligible results.
+        count = min(len(indices), max_results * 2 if dedup else max_results)
+        while True:
+            selected = nearest_positions(indices, distances, count)
+            results, seen = [], set()
+            for position in selected:
+                i = indices[position]
+                entry = self.entries[int(i)]
+                key = entry.get("image_url") or ("face", int(i))
+                if dedup and key in seen:
+                    continue
+                seen.add(key)
+                distance = float(distances[position])
+                results.append(dict(entry, distance=distance, similarity=max(0.0, 1.0 - distance)))
+                if len(results) >= max_results:
+                    break
+            if len(results) >= max_results or count == len(indices):
                 break
+            count = min(len(indices), count * 2)
         return results, {
             "valid_candidates": len(indices),
             "returned_candidates": len(results),

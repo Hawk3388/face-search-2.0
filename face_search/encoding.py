@@ -63,14 +63,21 @@ class FaceEncoder:
         self.model_id = "siamese-" + digest.hexdigest()[:16] + "-crop-v1"
 
     def extract(self, image):
+        locations = self.detect(image)
+        return locations, self.encode_locations(image, locations)
+
+    def detect(self, image):
+        """Locate faces without computing descriptors, for resolution selection."""
         import face_recognition
 
         locations = face_recognition.face_locations(image, model="hog")
         if len(locations) > self.settings.max_faces:
             raise ValueError(f"At most {self.settings.max_faces} faces per image are supported")
-        return locations, self.encode_locations(image, locations)
+        return locations
 
     def encode_locations(self, image, locations):
+        if not locations:
+            return []
         if self.model is None:
             import face_recognition
 
@@ -79,8 +86,6 @@ class FaceEncoder:
             )
         import torch
 
-        if not locations:
-            return []
         crops = [
             self.transform(Image.fromarray(image[top:bottom, left:right])) for top, right, bottom, left in locations
         ]

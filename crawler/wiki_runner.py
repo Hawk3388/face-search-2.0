@@ -8,6 +8,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from queue import Empty, Queue
 import signal
 import threading
 import time
@@ -50,7 +51,7 @@ class Crawler:
         import imagehash
 
         image = load_image(data, self.settings.max_upload_bytes, self.settings.max_pixels)
-        locations, embeddings = self.encoder.extract(image)
+        locations = self.encoder.detect(image)
         # Small faces / no detections get another chance at a higher resolution.
         small = any(min(b - t, r - l) < 80 for t, r, b, l in locations)
         if (not locations or small) and info["download_url"] != info["url"]:
@@ -63,10 +64,13 @@ class Crawler:
             if larger != info["download_url"]:
                 larger_data = self.api.http.get(larger, max_bytes=self.settings.max_upload_bytes)
                 larger_image = load_image(larger_data, self.settings.max_upload_bytes, self.settings.max_pixels)
-                larger_locations, larger_embeddings = self.encoder.extract(larger_image)
+                larger_locations = self.encoder.detect(larger_image)
                 # Keep the initial detection if the second pass detects fewer faces.
                 if len(larger_locations) >= len(locations):
-                    image, locations, embeddings = larger_image, larger_locations, larger_embeddings
+                    image, locations = larger_image, larger_locations
+        # Descriptor generation is expensive (especially with multiple jitters).
+        # Compute it only after selecting the resolution, reusing its detections.
+        embeddings = self.encoder.encode_locations(image, locations) if locations else []
         if len(locations) != len(embeddings):
             raise ValueError("Encoder did not return an embedding for every face")
         phash = str(imagehash.phash(Image.fromarray(image))) if locations else None
@@ -94,27 +98,55 @@ class Crawler:
         return entries, quality
 
     def process_images(self, pool):
-        """Bounded prefetch, a single encoder and exactly one database writer."""
-        while not self.stop.is_set():
-            self.store.maintain()
-            jobs = self.store.due_images(self.profile, self.workers * 2)
-            if not jobs:
+        """Process completed downloads immediately, with bounded rolling prefetch.
+
+        Keep at most 2 * workers downloads queued/ready plus the image currently
+        being analyzed. Only the calling thread accesses SQLite or the encoder.
+        """
+        capacity = self.workers * 2
+        pending, in_flight = {}, set()
+        completed = Queue()
+        handled = 0
+
+        def refill():
+            if self.stop.is_set() or len(pending) >= capacity:
                 return
-            futures = [
-                (
-                    job,
-                    json.loads(job["metadata"]),
-                    pool.submit(
-                        self.api.http.get,
-                        json.loads(job["metadata"])["download_url"],
-                        max_bytes=self.settings.max_upload_bytes,
-                    ),
-                )
-                for job in jobs
-            ]
-            for job, info, future in futures:
+            # Jobs remain durably pending until committed. Fetch enough rows to
+            # skip our bounded in-memory set without adding a database status
+            # that could strand jobs after a crash.
+            jobs = self.store.due_images(self.profile, capacity + len(in_flight))
+            for job in jobs:
+                if self.stop.is_set() or len(pending) >= capacity:
+                    break
+                if job["url"] in in_flight:
+                    continue
+                info = json.loads(job["metadata"])
+                future = pool.submit(self.api.http.get, info["download_url"], max_bytes=self.settings.max_upload_bytes)
+                pending[future] = (job, info)
+                in_flight.add(job["url"])
+                # Callback threads only enqueue futures; storage stays on this thread.
+                future.add_done_callback(completed.put)
+
+        if self.stop.is_set():
+            return
+        try:
+            self.store.maintain()
+            refill()
+            while pending:
                 if self.stop.is_set():
                     raise Stopped()
+                try:
+                    future = completed.get(timeout=0.25)
+                except Empty:
+                    continue
+                if self.stop.is_set():
+                    raise Stopped()
+                self.store.maintain()
+                job, info = pending.pop(future)
+                # Refill before encoding so downloads overlap expensive analysis.
+                # The current URL stays excluded until its outcome is committed.
+                refill()
+                data = None
                 try:
                     data = future.result()
                     entries, quality = self.analyze(info, data)
@@ -123,11 +155,23 @@ class Crawler:
                 except (requests.RequestException, ValueError, OSError) as exc:
                     self.store.fail_image(job, exc)
                     LOG.warning("Image queued for retry: %s: %s", job["url"], exc)
-                    continue
-                # Storage errors must stop the run, never turn into a skipped image.
-                self.store.complete_image(job, entries, quality)
-                self.processed += 1
-            LOG.info("Images: %s", self.store.counts(self.profile))
+                else:
+                    # Storage errors stop the run; never turn them into skipped images.
+                    self.store.complete_image(job, entries, quality)
+                    self.processed += 1
+                finally:
+                    data = None
+                in_flight.remove(job["url"])
+                handled += 1
+                # Release downloaded bytes before waiting for another result.
+                del future
+                refill()
+                if handled % capacity == 0 or not pending:
+                    LOG.info("Images: %s", self.store.counts(self.profile))
+        finally:
+            # Cancel work that has not started; unfinished jobs remain retryable in SQLite.
+            for future in pending:
+                future.cancel()
 
     def run(self, category, once=False, max_articles=0, refresh_seconds=86400, pages=None):
         scope = json.dumps([self.api.wiki, category, pages or [], self.profile])

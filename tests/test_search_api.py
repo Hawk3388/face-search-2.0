@@ -156,6 +156,60 @@ def test_exact_self_match_at_zero_tolerance():
     assert matches[0]["distance"] == 0
 
 
+@pytest.mark.parametrize("metric", ["cosine", "euclidean"])
+def test_tiny_nonzero_vectors_and_self_match(metric):
+    query = np.full(128, 1e-30, dtype=np.float32)
+    index = SearchIndex.build([{"embedding": query, "image_url": "https://example.org/a"}])
+    matches, _ = index.search(query, tolerance=0, metric=metric)
+    assert len(matches) == 1 and matches[0]["distance"] == 0
+    np.testing.assert_allclose(np.linalg.norm(index.normalized, axis=1), 1, atol=1e-6)
+
+
+@pytest.mark.parametrize("metric", ["cosine", "euclidean"])
+def test_threshold_decisions_are_not_rounded_to_float32(metric):
+    query = np.zeros(128, dtype=np.float32)
+    query[0] = 1
+    candidate = query.copy()
+    candidate[1] = np.float32(0.1234567)
+    index = SearchIndex.build([{"embedding": candidate, "image_url": "https://example.org/a"}])
+    a, b = query.astype(np.float64), candidate.astype(np.float64)
+    distance = (
+        np.linalg.norm(a - b)
+        if metric == "euclidean"
+        else 0.5 * np.sum((a / np.linalg.norm(a) - b / np.linalg.norm(b)) ** 2)
+    )
+    assert index.search(query, tolerance=distance - 1e-12, metric=metric)[0] == []
+    assert len(index.search(query, tolerance=distance + 1e-12, metric=metric)[0]) == 1
+
+
+@pytest.mark.parametrize("dedup", [True, False])
+def test_partial_selection_keeps_ties_and_expands_past_duplicate_images(dedup):
+    records = []
+    for i in range(150):
+        row = vector()
+        row[1] = 0.01 if i < 120 else 0.1
+        records.append({"embedding": row, "image_url": f"https://example.org/{0 if i < 120 else i}", "id": i})
+    index = SearchIndex.build(records)
+    results, meta = index.search(vector(), tolerance=1, max_results=4, dedup=dedup)
+    assert [r["id"] for r in results] == ([0, 120, 121, 122] if dedup else [0, 1, 2, 3])
+    assert meta["valid_candidates"] == 150
+
+
+def test_thumbnail_hosts_deduplicate_without_collapsing_other_sites_query_parameters():
+    from face_search.search import normalize_image_url
+
+    original = "https://upload.wikimedia.org/wikipedia/commons/a/ab/Photo.jpg"
+    thumbnail = (
+        "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/Photo.jpg/960px-Photo.jpg?utm_source=en.wikipedia.org"
+    )
+    assert normalize_image_url(thumbnail) == original
+    page = "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Book.pdf/page1-960px-Book.pdf.jpg"
+    assert normalize_image_url(page) == page
+    assert normalize_image_url("https://example.org/image?id=1") != normalize_image_url(
+        "https://example.org/image?id=2"
+    )
+
+
 def test_analysis_invalid_image_and_request_limits(tmp_path):
     path = tmp_path / "faces.json"
     path.write_text(json.dumps([{"embedding": vector().tolist(), "image_url": "https://example.org/a"}]))
@@ -328,3 +382,24 @@ def test_malformed_requests_and_http_errors_keep_error_envelope(api):
         headers={"Authorization": "Bearer test-token"},
     )
     assert multiple.status_code == 400 and "error" in multiple.json()
+
+
+@pytest.mark.parametrize("metric", ["cosine", "euclidean"])
+def test_large_candidate_set_matches_float64_threshold_decisions(metric):
+    matrix = np.column_stack((np.ones(5000), np.linspace(0, 1.5, 5000))).astype(np.float32)
+    index = SearchIndex.build(
+        ({"id": i, "embedding": row, "image_url": f"https://example.org/{i}.jpg"} for i, row in enumerate(matrix)),
+        dimension=2,
+    )
+    reference = matrix.astype(np.float64)
+    if metric == "cosine":
+        reference /= np.linalg.norm(reference, axis=1)[:, None]
+        expected = 0.5 * np.sum((reference - [1, 0]) ** 2, axis=1)
+    else:
+        expected = np.linalg.norm(reference - [1, 0], axis=1)
+    for offset in (-1e-12, 1e-12):
+        tolerance = expected[4700] + offset
+        results, meta = index.search([1, 0], metric=metric, tolerance=tolerance, max_results=5000, dedup=False)
+        expected_ids = np.flatnonzero(expected <= tolerance).tolist()
+        assert [row["id"] for row in results] == expected_ids
+        assert meta["valid_candidates"] == len(expected_ids)
