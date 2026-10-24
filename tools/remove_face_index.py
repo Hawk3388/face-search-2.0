@@ -1,3 +1,10 @@
+import sys
+from pathlib import Path
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from pathlib import Path
+from face_search.storage import backup_file
 #!/usr/bin/env python3
 """
 Simple script to remove 'face_index' field from face_embeddings.json
@@ -16,6 +23,8 @@ def remove_face_index():
             del entry['face_index']
     
     # Save database with original formatting
+    if Path('face_embeddings.json').exists():
+        backup_file('face_embeddings.json')
     with open('face_embeddings.json', 'w') as f:
         json.dump(data, f, indent=2)
     

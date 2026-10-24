@@ -1,3 +1,10 @@
+import sys
+from pathlib import Path
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from pathlib import Path
+from face_search.storage import backup_file
 import json
 import torch
 import time
@@ -135,10 +142,12 @@ def main():
     
     backup_path = "face_embeddings_backup.json"
     print(f"💾 Erstelle Backup in {backup_path}")
-    shutil.copy2(db_path, backup_path)
+    backup_path = backup_file(db_path)
     
     out_path = "face_embeddings_cleaned_hash.json"
     print(f"💾 Speichere bereinigte Datenbank unter: {out_path}")
+    if Path(out_path).exists():
+        backup_file(out_path)
     with open(out_path, "w") as f:
         json.dump(cleaned_database, f, indent=2)
         

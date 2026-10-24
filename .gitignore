@@ -1,5 +1,4 @@
 *.json
-test*
 dlib/
 *.bak
 last_crawled_page.txt
@@ -15,3 +14,16 @@ föhn_ideen.txt
 *.bat
 stats.txt
 *.db*
+dataset/
+prepared/
+.venv*/
+.tmp/
+.pytest_cache/
+pytest-cache-files-*/
+.ruff_cache/
+runs/
+*.backup-*
+*.lock
+*.egg-info/
+build/
+dist/

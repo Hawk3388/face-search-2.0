@@ -1,6 +1,11 @@
+import sys
+from pathlib import Path
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import time
 import random
-from clean_db import find_hash_duplicates
+from tools.clean_db import find_duplicates_hash
 
 def generate_test_data(count=40000):
     """Generates test data with real phash values"""
@@ -65,7 +70,7 @@ def benchmark_performance():
         start_time = time.time()
         
         # Perform duplicate search
-        duplicates = find_hash_duplicates(test_data, hash_threshold=5)
+        duplicates = find_duplicates_hash(test_data, threshold=5)
         
         end_time = time.time()
         duration = end_time - start_time
@@ -92,7 +97,7 @@ def quick_40k_estimate():
     test_data = generate_test_data(test_size)
     
     start_time = time.time()
-    duplicates = find_hash_duplicates(test_data, hash_threshold=5)
+    duplicates = find_duplicates_hash(test_data, threshold=5)
     end_time = time.time()
     
     duration = end_time - start_time

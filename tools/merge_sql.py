@@ -1,7 +1,14 @@
+import sys
+from pathlib import Path
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import os
 import shutil
 import sqlite3
 import urllib.parse
+from face_search.storage import backup_database as verified_backup, ensure_schema
 
 
 DB_FILE = "face_embeddings.db"
@@ -32,9 +39,7 @@ def normalize_image_url(url):
 
 
 def backup_database(db_path):
-    backup_path = f"{db_path}.bak"
-    shutil.copy2(db_path, backup_path)
-    return backup_path
+    return verified_backup(db_path)
 
 
 def fetch_images(conn):
@@ -45,10 +50,7 @@ def fetch_images(conn):
 
 def fetch_page_urls(conn, image_id):
     cur = conn.cursor()
-    cur.execute(
-        "SELECT page_url FROM wiki_pages WHERE image_id=? ORDER BY rowid",
-        (image_id,)
-    )
+    cur.execute("SELECT page_url FROM wiki_pages WHERE image_id=? ORDER BY rowid", (image_id,))
     return [row[0] for row in cur.fetchall() if row[0]]
 
 
@@ -72,6 +74,7 @@ def merge_database(db_path=DB_FILE):
     backup_path = backup_database(db_path)
     print(f"💾 Backup erstellt: {backup_path}")
 
+    ensure_schema(db_path)
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA journal_mode=WAL")
@@ -105,20 +108,14 @@ def merge_database(db_path=DB_FILE):
             if len(group_rows) == 1:
                 image_id, image_url, phash, embedding = group_rows[0]
                 if image_url != normalized_url:
-                    conn.execute(
-                        "UPDATE images SET image_url=? WHERE id=?",
-                        (normalized_url, image_id)
-                    )
+                    conn.execute("UPDATE images SET image_url=? WHERE id=?", (normalized_url, image_id))
                 continue
 
             canonical_row = choose_canonical_row(group_rows, normalized_url)
             canonical_id, canonical_url, canonical_phash, canonical_embedding = canonical_row
 
             if canonical_url != normalized_url:
-                conn.execute(
-                    "UPDATE images SET image_url=? WHERE id=?",
-                    (normalized_url, canonical_id)
-                )
+                conn.execute("UPDATE images SET image_url=? WHERE id=?", (normalized_url, canonical_id))
 
             for duplicate_row in group_rows:
                 duplicate_id, duplicate_url, duplicate_phash, duplicate_embedding = duplicate_row
@@ -128,20 +125,22 @@ def merge_database(db_path=DB_FILE):
                 page_urls = fetch_page_urls(conn, duplicate_id)
                 for page_url in page_urls:
                     conn.execute(
-                        "INSERT OR IGNORE INTO wiki_pages(image_id, page_url) VALUES (?, ?)",
-                        (canonical_id, page_url)
+                        "INSERT OR IGNORE INTO wiki_pages(image_id, page_url) VALUES (?, ?)", (canonical_id, page_url)
                     )
 
                 moved_pages += len(page_urls)
 
+                # Preserve ALL face embeddings before removing duplicate image rows.
                 conn.execute(
-                    "DELETE FROM wiki_pages WHERE image_id=?",
-                    (duplicate_id,)
+                    """INSERT OR IGNORE INTO faces
+                    (image_id,model_id,dimension,preprocessing,bbox,embedding,embedding_hash)
+                    SELECT ?,model_id,dimension,preprocessing,bbox,embedding,embedding_hash
+                    FROM faces WHERE image_id=?""",
+                    (canonical_id, duplicate_id),
                 )
-                conn.execute(
-                    "DELETE FROM images WHERE id=?",
-                    (duplicate_id,)
-                )
+                conn.execute("DELETE FROM faces WHERE image_id=?", (duplicate_id,))
+                conn.execute("DELETE FROM wiki_pages WHERE image_id=?", (duplicate_id,))
+                conn.execute("DELETE FROM images WHERE id=?", (duplicate_id,))
                 merged_images += 1
 
         conn.commit()

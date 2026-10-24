@@ -1,3 +1,6 @@
+from copy import deepcopy
+from pathlib import Path
+from datetime import datetime
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -40,81 +43,88 @@ class TinyFaceNet_train(nn.Module):
         x = torch.sigmoid(self.fc2(x))
         return x
 
-# 🔹 Daten vorbereiten
-transform = transforms.Compose([
-    transforms.Resize((128, 128)),
-    transforms.ToTensor(),
-    transforms.Normalize((0.5, 0.5, 0.5),
-                         (0.5, 0.5, 0.5))
-])
+def main():
+    # 🔹 Daten vorbereiten
+    transform = transforms.Compose([
+        transforms.Resize((128, 128)),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5),
+                             (0.5, 0.5, 0.5))
+    ])
 
-dataset = datasets.ImageFolder(root="images", transform=transform)
+    dataset = datasets.ImageFolder(root="images", transform=transform)
 
-# Train/Test Split
-train_size = int(0.8 * len(dataset))
-test_size = len(dataset) - train_size
-train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
+    # Train/Test Split
+    train_size = int(0.8 * len(dataset))
+    test_size = len(dataset) - train_size
+    train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
 
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
-# 🔹 Model, Loss, Optimizer
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = TinyFaceNet_train().to(device)
+    # 🔹 Model, Loss, Optimizer
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = TinyFaceNet_train().to(device)
 
-criterion = nn.BCELoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+    criterion = nn.BCELoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-# 🔹 Training Loop mit Early Stopping
-EPOCHS = 50
-patience = 5   # wie viele Epochen ohne Verbesserung wir warten
-best_acc = 0.0
-epochs_no_improve = 0
-best_model_wts = None
+    # 🔹 Training Loop mit Early Stopping
+    EPOCHS = 50
+    patience = 5   # wie viele Epochen ohne Verbesserung wir warten
+    best_acc = 0.0
+    epochs_no_improve = 0
+    best_model_wts = None
 
-for epoch in range(EPOCHS):
-    model.train()
-    running_loss = 0.0
-    for images, labels in train_loader:
-        images, labels = images.to(device), labels.float().to(device)
-
-        optimizer.zero_grad()
-        outputs = model(images).squeeze()
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
-
-        running_loss += loss.item()
-
-    # Evaluation
-    model.eval()
-    correct, total = 0, 0
-    with torch.no_grad():
-        for images, labels in test_loader:
+    for epoch in range(EPOCHS):
+        model.train()
+        running_loss = 0.0
+        for images, labels in train_loader:
             images, labels = images.to(device), labels.float().to(device)
-            outputs = model(images).squeeze()
-            preds = (outputs > 0.5).float()
-            correct += (preds == labels).sum().item()
-            total += labels.size(0)
 
-    acc = 100 * correct / total
-    avg_loss = running_loss / len(train_loader)
-    print(f"Epoch {epoch+1}/{EPOCHS}, Loss: {avg_loss:.4f}, Val Acc: {acc:.2f}%")
+            optimizer.zero_grad()
+            outputs = model(images).squeeze(-1)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
 
-    # 🔹 Early Stopping check
-    if acc > best_acc:
-        best_acc = acc
-        best_model_wts = model.state_dict()
-        epochs_no_improve = 0
-        print("✅ Verbesserung gefunden, Modell gespeichert")
-    else:
-        epochs_no_improve += 1
-        if epochs_no_improve >= patience:
-            print(f"⏹️ Kein Fortschritt für {patience} Epochen. Stoppe Training.")
-            break
+            running_loss += loss.item()
 
-# 🔹 Bestes Modell speichern
-if best_model_wts:
-    model.load_state_dict(best_model_wts)
-torch.save(model.state_dict(), "tinyfacenet_best.pth")
-print(f"🏆 Training beendet, bestes Modell gespeichert (Val Acc: {best_acc:.2f}%)")
+        # Evaluation
+        model.eval()
+        correct, total = 0, 0
+        with torch.no_grad():
+            for images, labels in test_loader:
+                images, labels = images.to(device), labels.float().to(device)
+                outputs = model(images).squeeze(-1)
+                preds = (outputs > 0.5).float()
+                correct += (preds == labels).sum().item()
+                total += labels.size(0)
+
+        acc = 100 * correct / total
+        avg_loss = running_loss / len(train_loader)
+        print(f"Epoch {epoch+1}/{EPOCHS}, Loss: {avg_loss:.4f}, Val Acc: {acc:.2f}%")
+
+        # 🔹 Early Stopping check
+        if acc > best_acc:
+            best_acc = acc
+            best_model_wts = deepcopy(model.state_dict())
+            epochs_no_improve = 0
+            print("✅ Verbesserung gefunden, Modell gespeichert")
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                print(f"⏹️ Kein Fortschritt für {patience} Epochen. Stoppe Training.")
+                break
+
+    # 🔹 Bestes Modell speichern
+    if best_model_wts:
+        model.load_state_dict(best_model_wts)
+    output = Path("runs") / datetime.now().strftime("tinyfacenet-%Y%m%d-%H%M%S-%f.pth")
+    output.parent.mkdir(exist_ok=True)
+    torch.save(model.state_dict(), output)
+    print(f"Saved: {output}")
+    print(f"🏆 Training beendet, bestes Modell gespeichert (Val Acc: {best_acc:.2f}%)")
+
+if __name__ == "__main__":
+    main()

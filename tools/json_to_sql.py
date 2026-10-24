@@ -1,113 +1,40 @@
-import json
-import sqlite3
-import numpy as np
+"""Import every face from JSON, backing up an existing destination first."""
+
+import sys
 from pathlib import Path
 
-JSON_FILE = "face_embeddings_original.json"
-DB_FILE = "face_embeddings.db"
-BATCH_SIZE = 10000
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-
-def create_database(conn):
-    cur = conn.cursor()
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS images (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        image_url TEXT UNIQUE,
-        phash TEXT,
-        embedding BLOB
-    )
-    """)
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS wiki_pages (
-        image_id INTEGER,
-        page_url TEXT,
-        PRIMARY KEY(image_id, page_url),
-        FOREIGN KEY(image_id) REFERENCES images(id)
-    )
-    """)
-
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_image_url ON images(image_url)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_phash ON images(phash)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_page_url ON wiki_pages(page_url)")
-
-    conn.commit()
+import argparse
+from contextlib import closing
+from pathlib import Path
+import sqlite3
+from face_search.storage import backup_database, ensure_schema, read_json, save_article
 
 
 def main():
-    if not Path(JSON_FILE).exists():
-        print("JSON-Datei nicht gefunden.")
-        return
-
-    print("📂 Lade JSON...")
-    with open(JSON_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    print(f"📊 {len(data)} Einträge gefunden")
-
-    conn = sqlite3.connect(DB_FILE)
-    create_database(conn)
-    cur = conn.cursor()
-
-    count = 0
-
-    for entry in data:
-
-        embedding = None
-        if "embedding" in entry and entry["embedding"] is not None:
-            embedding = np.asarray(entry["embedding"], dtype=np.float32).tobytes()
-
-        image_url = entry.get("image_url")
-
-        cur.execute(
-            "SELECT id FROM images WHERE image_url=?",
-            (image_url,)
-        )
-
-        row = cur.fetchone()
-
-        if row is None:
-            cur.execute("""
-                INSERT INTO images(image_url, phash, embedding)
-                VALUES (?, ?, ?)
-            """, (
-                image_url,
-                entry.get("phash"),
-                embedding
-            ))
-            image_id = cur.lastrowid
-        else:
-            image_id = row[0]
-
-        urls = []
-
-        if entry.get("page_url"):
-            urls.append(entry["page_url"])
-
-        if entry.get("page_urls"):
-            urls.extend(entry["page_urls"])
-
-        urls = list(dict.fromkeys(urls))
-
-        for url in urls:
-            cur.execute("""
-                INSERT OR IGNORE INTO wiki_pages(image_id, page_url)
-                VALUES (?, ?)
-            """, (image_id, url))
-
-        count += 1
-
-        if count % BATCH_SIZE == 0:
-            conn.commit()
-            print(f"✅ {count}/{len(data)} importiert")
-
-    conn.commit()
-    conn.close()
-
-    print("🎉 Fertig!")
-    print(f"SQLite-Datenbank gespeichert als: {DB_FILE}")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", type=Path, default=Path("face_embeddings.json"))
+    parser.add_argument("--output", type=Path, default=Path("face_embeddings.db"))
+    args = parser.parse_args()
+    if args.source.resolve() == args.output.resolve():
+        parser.error("Source and output must differ")
+    if args.output.exists():
+        print(f"Verified backup: {backup_database(args.output)}")
+    ensure_schema(args.output)
+    with closing(sqlite3.connect(args.output)) as conn:
+        batch = []
+        count = 0
+        for entry in read_json(args.source):
+            batch.append(entry)
+            if len(batch) == 1000:
+                save_article(conn, batch)
+                count += len(batch)
+                batch.clear()
+                print(f"Imported {count} records")
+        save_article(conn, batch)
+        print(f"Complete: {count + len(batch)} records; source unchanged")
 
 
 if __name__ == "__main__":
