@@ -1,4 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+from dataclasses import replace
 from io import BytesIO
 import json
 import sqlite3
@@ -104,6 +106,104 @@ def test_repeated_image_cursor_fails_instead_of_looping():
     reply = {"query": {}, "continue": {"gimcontinue": "same"}}
     with pytest.raises(ValueError, match="Repeated"):
         WikiApi(FakeHttp([reply, reply])).images(1)
+
+
+def test_file_history_fallback_keeps_all_current_files_across_batches():
+    titles = [f"File:Photo-{i}.jpg" for i in range(51)]
+    history = {"iistart": "2012-05-19T18:14:01Z", "continue": "||"}
+
+    def metadata(i):
+        return {
+            "title": titles[i],
+            "missing": True,
+            "imageinfo": [
+                {**info(f"current-{i}"), "url": f"https://example.org/{i}.jpg", "timestamp": "2026-11-01T00:00:00Z"}
+            ],
+        }
+
+    http = FakeHttp(
+        [
+            {"query": {"pages": [metadata(0)]}, "continue": history},
+            {
+                "query": {"pages": [{"images": [{"title": title} for title in titles[:50]]}]},
+                "continue": {"imcontinue": "42|Photo-50.jpg", "continue": "||"},
+            },
+            {"query": {"pages": [{"images": [{"title": titles[50]}]}]}},
+            {"query": {"pages": [metadata(i) for i in range(50)]}, "continue": history},
+            {"query": {"pages": [metadata(50)]}, "continue": history},
+        ]
+    )
+    images = WikiApi(http).images(42)
+    assert len(images) == 51
+    assert {image["sha1"] for image in images} == {f"current-{i}" for i in range(51)}
+    params = [kwargs["params"] for _, kwargs in http.calls]
+    assert len(params) == 5
+    assert params[1]["prop"] == "images" and params[1]["imlimit"] == 50
+    assert params[2]["imcontinue"] == "42|Photo-50.jpg"
+    assert len(params[3]["titles"].split("|")) == 50
+    assert params[4]["titles"] == titles[50]
+    assert all("iistart" not in p for p in params)
+    assert all(p["iilimit"] == 1 for p in params if p["prop"] == "imageinfo")
+
+
+def test_current_metadata_continues_additional_files_but_not_old_revisions():
+    history = {"iistart": "2012-05-19T18:14:01Z", "continue": "||"}
+    http = FakeHttp(
+        [
+            {"query": {}, "continue": history},
+            {"query": {"pages": [{"images": [{"title": "File:A.jpg"}, {"title": "File:B.jpg"}]}]}},
+            {
+                "query": {"pages": [{"title": "File:A.jpg", "imageinfo": [info()]}]},
+                "continue": {**history, "iicontinue": "File:B.jpg"},
+            },
+            {
+                "query": {
+                    "pages": [
+                        {
+                            "title": "File:B.jpg",
+                            "missing": True,
+                            "imageinfo": [{**info(), "url": "https://example.org/b.jpg"}],
+                        }
+                    ]
+                },
+                "continue": history,
+            },
+        ]
+    )
+    assert len(WikiApi(http).images(42)) == 2
+    assert http.calls[-1][1]["params"]["iicontinue"] == "File:B.jpg"
+    assert "iistart" not in http.calls[-1][1]["params"]
+
+
+@pytest.mark.parametrize("stage", ["images", "imageinfo"])
+def test_history_fallback_still_rejects_real_pagination_loops(stage):
+    replies = [{"query": {}, "continue": {"iistart": "old", "continue": "||"}}]
+    if stage == "imageinfo":
+        replies.append({"query": {"pages": [{"images": [{"title": "File:A.jpg"}]}]}})
+    cursor = {"imcontinue" if stage == "images" else "iicontinue": "same", "continue": "||"}
+    replies.extend([{"query": {}, "continue": cursor}] * 2)
+    with pytest.raises(ValueError, match="Repeated MediaWiki"):
+        WikiApi(FakeHttp(replies)).images(42)
+
+
+def test_partial_current_image_metadata_failure_keeps_article_pending(store):
+    http = FakeHttp(
+        [
+            {"query": {"categorymembers": [{"pageid": 42, "title": "Person"}]}},
+            {
+                "query": {"pages": [{"title": "File:A.jpg", "imageinfo": [info()]}]},
+                "continue": {"iistart": "old", "continue": "||"},
+            },
+            {"query": {"pages": [{"images": [{"title": "File:A.jpg"}]}]}},
+            requests.Timeout("metadata unavailable"),
+        ]
+    )
+    crawler = Crawler(WikiApi(http), store, Encoder(), Settings(store.path))
+    crawler.run("Category:People", once=True)
+    row = store.conn.execute("SELECT status,error FROM crawler_articles").fetchone()
+    assert row["status"] == "retry" and row["error"] == "metadata unavailable"
+    assert store.counts(crawler.profile) == {}
+    assert store.conn.execute("SELECT count(*) FROM faces").fetchone()[0] == 0
 
 
 def test_html_lazy_picture_srcset_noscript_and_extensionless_images():
@@ -327,6 +427,154 @@ def test_one_pass_processes_final_category_batch(store):
     crawler = Crawler(WikiApi(http), store, Encoder(), Settings(store.path), workers=1)
     crawler.run("Category:People", once=True)
     assert store.counts(crawler.profile) == {"done": 1}
+
+
+def test_old_article_retries_do_not_block_next_category_batch(store, caplog):
+    calls = []
+    saved_cursor = {"cmcontinue": "page|Cheung", "continue": "-||"}
+
+    class Api(WikiApi):
+        def images(self, page_id):
+            calls.append(("article", page_id))
+            return []
+
+        def category_batch(self, category, cursor=None):
+            calls.append(("category", cursor))
+            return [{"pageid": 101, "title": "Next C article"}], None
+
+    crawler = Crawler(Api(FakeHttp()), store, Encoder(), Settings(store.path))
+    scope = json.dumps([crawler.api.wiki, "Category:People", [], crawler.profile])
+    store.enqueue_batch(scope, [{"pageid": i, "title": f"Old A article {i}"} for i in range(1, 5)], saved_cursor, 86400)
+    for row in store.due_articles(scope):
+        store.fail_article(scope, row, "Repeated MediaWiki continuation token")
+    store.enqueue_batch(scope, [{"pageid": 100, "title": "Current C article"}], saved_cursor, 86400)
+    with store.conn:
+        store.conn.execute("UPDATE crawler_articles SET retry_at=0 WHERE status='retry'")
+    with caplog.at_level("INFO"):
+        crawler.run("Category:People", once=True)
+    assert calls == [
+        ("article", 100),
+        ("article", 1),
+        ("category", saved_cursor),
+        ("article", 101),
+        ("article", 2),
+        ("article", 3),
+        ("article", 4),
+    ]
+    assert "Resuming saved category cursor" in caplog.text
+    assert "Retrying older article (attempt 2): Old A article 1" in caplog.text
+    assert "Retrying older article (attempt 2): Current C article" not in caplog.text
+    assert not store.due_articles(scope)
+
+
+def test_once_drains_remaining_queued_articles_after_scan_finished(store):
+    calls = []
+
+    class Api(WikiApi):
+        def images(self, page_id):
+            calls.append(page_id)
+            return []
+
+        def category_batch(self, *args, **kwargs):
+            pytest.fail("A finished scan must not start over")
+
+    crawler = Crawler(Api(FakeHttp()), store, Encoder(), Settings(store.path))
+    scope = json.dumps([crawler.api.wiki, "Category:People", [], crawler.profile])
+    store.enqueue_batch(scope, [{"pageid": i, "title": str(i)} for i in range(125)], None, 86400)
+    for row in store.due_articles(scope, limit=200):
+        store.fail_article(scope, row, "old error")
+    with store.conn:
+        store.conn.execute("UPDATE crawler_articles SET retry_at=0 WHERE status='retry'")
+    crawler.run("Category:People", once=True)
+    assert len(calls) == 125 and len(set(calls)) == 125
+    assert store.conn.execute("SELECT count(*) FROM crawler_articles WHERE status='done'").fetchone()[0] == 125
+
+
+def test_resume_with_three_jitters_keeps_old_cursor_cache_and_retry_queue(tmp_path):
+    path = tmp_path / "resume-jitters.db"
+    category = "Category:People"
+    cursor = {"cmcontinue": "page|Cheuk Wan-chi", "continue": "-||"}
+    old_settings = Settings(path, num_jitters=10)
+    new_settings = replace(old_settings, num_jitters=3)
+    store = CrawlStore(path, min_free_bytes=0)
+    try:
+        old = Crawler(WikiApi(FakeHttp()), store, Encoder(), old_settings)
+        scope = json.dumps([old.api.wiki, category, [], old.profile])
+        store.enqueue_batch(scope, [{"pageid": 1, "title": "Done"}, {"pageid": 2, "title": "Next"}], cursor, 86400)
+        photos = [
+            {**info(), "url": f"https://example.org/{i}.jpg", "download_url": f"https://example.org/{i}.jpg"}
+            for i in range(4)
+        ]
+        store.discover(scope, store.due_articles(scope)[0], "https://example.org/Done", photos, old.profile)
+        jobs = store.due_images(old.profile)
+        store.complete_image(jobs[0], [{"embedding": np.ones(128)}], {})
+        store.complete_image(jobs[1], [], {})
+        store.fail_image(jobs[2], "timeout")
+        retry_before = dict(store.conn.execute("SELECT * FROM crawler_images WHERE status='retry'").fetchone())
+        old_blob = store.conn.execute("SELECT embedding FROM faces").fetchone()[0]
+
+        # A short, independent 3-jitter run must neither hide the old progress nor
+        # lose data when switching back to the old queue identity.
+        separate = Crawler(WikiApi(FakeHttp()), store, Encoder(), new_settings)
+        article(store, profile=separate.profile)
+        store.complete_image(store.due_images(separate.profile)[0], [{"embedding": np.full(128, 2)}], {})
+    finally:
+        store.close()
+
+    calls = []
+
+    class ResumeApi(WikiApi):
+        def images(self, page_id):
+            calls.append(("article", page_id))
+            return []
+
+        def category_batch(self, category, cursor=None):
+            calls.append(("cursor", cursor))
+            return [], None
+
+    class NewEncoder(Encoder):
+        def encode_locations(self, image, locations):
+            calls.append(("jitters", new_settings.num_jitters))
+            return [np.full(128, new_settings.num_jitters) for _ in locations]
+
+    store = CrawlStore(path, min_free_bytes=0)
+    try:
+        http = FakeHttp([image_bytes(400)])
+        resumed = Crawler(ResumeApi(http), store, NewEncoder(), new_settings, workers=1, progress_num_jitters=10)
+        assert resumed.profile == old.profile != separate.profile
+        resumed.run(category, once=True)
+        assert calls == [("jitters", 3), ("article", 2), ("cursor", cursor)]
+        assert [url for url, _ in http.calls] == [photos[3]["download_url"]]
+        assert store.counts(resumed.profile) == {"done": 2, "no_faces": 1, "retry": 1}
+        assert dict(store.conn.execute("SELECT * FROM crawler_images WHERE status='retry'").fetchone()) == retry_before
+        assert store.counts(separate.profile) == {"done": 1}
+        assert store.conn.execute("SELECT embedding FROM faces ORDER BY id LIMIT 1").fetchone()[0] == old_blob
+        assert store.conn.execute("SELECT count(*) FROM faces").fetchone()[0] == 3
+        # Repeating the same settings resumes the same completed scope.
+        resumed.run(category, once=True)
+        assert len(calls) == 3
+        backups = list(tmp_path.glob("resume-jitters.db.backup-*"))
+        assert backups
+        with closing(sqlite3.connect(backups[-1])) as backup:
+            assert backup.execute("SELECT count(*) FROM faces").fetchone()[0] == 2
+    finally:
+        store.close()
+
+
+def test_progress_override_only_reuses_matching_model_and_settings(store):
+    old_settings = Settings(store.path, num_jitters=10)
+    old = Crawler(WikiApi(FakeHttp()), store, Encoder(), old_settings)
+    settings = replace(old_settings, num_jitters=3)
+    default = Crawler(WikiApi(FakeHttp()), store, Encoder(), settings)
+    assert default.profile != old.profile
+    wider = Crawler(WikiApi(FakeHttp(), width=1200), store, Encoder(), settings, progress_num_jitters=10)
+    assert wider.profile != old.profile
+    other_model = Encoder()
+    other_model.model_id = "other-model"
+    changed = Crawler(WikiApi(FakeHttp()), store, other_model, settings, progress_num_jitters=10)
+    assert changed.profile != old.profile
+    with pytest.raises(ValueError, match="num_jitters must be positive"):
+        Crawler(WikiApi(FakeHttp()), store, Encoder(), settings, progress_num_jitters=0)
 
 
 def test_retry_after_http_date_and_seconds(monkeypatch):

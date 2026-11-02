@@ -240,12 +240,22 @@ Wikipedia discovery uses [Categorymembers](https://www.mediawiki.org/wiki/API:Ca
 and the [Images generator](https://www.mediawiki.org/wiki/API:Images), including all API
 continuation pages, embedded template/gallery images, and Commons-hosted files. It
 does not follow category HTML previous-page links. Image metadata is queried in
-batches of up to 50. Category cursors and article jobs are committed together;
+batches of up to 50. If combined discovery requests return an `iistart` cursor
+(older file revisions), the crawler enumerates the complete article file list
+separately and requests only current file metadata. It still follows image-list
+and additional-file metadata cursors, but never walks upload history. Genuine
+pagination loops or partial metadata failures keep the article queued for retry.
+Category cursors and article jobs are committed together;
 image jobs survive article completion and failed downloads receive persistent,
 exponentially delayed retries (up to one day between attempts). `--once` processes
 the category pass and currently due jobs; future retries stay queued for the next
 run. Without `--once`, retries are checked every 30 seconds and discovery repeats
 every 24 hours by default. `--page` runs finish after the selected articles.
+While category discovery is active, queued new articles are processed first,
+with at most one older article retry per round. At the end of the pass, remaining
+currently due article retries are drained in batches. Retry logs explicitly say
+`Retrying older article`; an earlier alphabetical name in such a log does not
+reset the saved category cursor.
 
 Three download workers prefetch a bounded number of images with reusable HTTP
 sessions. Completed downloads are processed in completion order, and free slots
@@ -292,6 +302,24 @@ Tune `CRAWLER_DOWNLOAD_WORKERS`, `CRAWLER_PREVIEW_WIDTH`, `CRAWLER_REQUEST_INTER
 The Wikipedia crawler retains `NUM_JITTERS` (10 by default). An optional
 `CRAWLER_NUM_JITTERS=1` reduces encoding cost but changes descriptor sampling; measure
 retrieval quality before using it. The cache profile includes this setting.
+To continue an existing 10-jitter crawl while encoding pending/new images with
+three jitters, set both variables and keep them on subsequent restarts:
+
+```dotenv
+CRAWLER_NUM_JITTERS=3
+CRAWLER_PROGRESS_NUM_JITTERS=10
+```
+
+The second value selects the existing progress/cache identity, not the encoder's
+sampling count. This applies to Wikipedia and web crawlers. Existing article cursors,
+completed images (including no-face results), and retry queues are reused without a
+database migration; the normal verified startup backup still runs. Other profile
+settings (model, preprocessing, preview width and limits) must match the original
+run. A temporary separate 3-jitter run remains stored separately, with its embeddings
+retained; its queue is not merged into the original run. The startup log reports
+the reused jitter count, the actual encoding count and cached image counts.
+Without this explicit override, the existing profile-change behavior is retained.
+
 Use a descriptive `USER_AGENT` with your contact/project information.
 The HTTP client trusts the operating system's CA roots as well as Requests' CA bundle,
 including managed Windows roots, and keeps certificate/hostname verification enabled.

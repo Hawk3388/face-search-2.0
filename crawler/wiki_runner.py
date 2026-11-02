@@ -40,11 +40,23 @@ def profile_id(encoder, settings, width):
 
 
 class Crawler:
-    def __init__(self, api, store, encoder, settings, workers=3, stop=None):
+    def __init__(self, api, store, encoder, settings, workers=3, stop=None, progress_num_jitters=None):
         self.api, self.store, self.encoder, self.settings = api, store, encoder, settings
         self.workers = workers
         self.stop = stop or api.http.stop
-        self.profile = profile_id(encoder, settings, api.width)
+        # Keep the original queue/cache identity when explicitly resuming with
+        # different descriptor sampling. The encoder still uses actual settings.
+        progress_settings = (
+            settings if progress_num_jitters is None else replace(settings, num_jitters=progress_num_jitters)
+        )
+        self.profile = profile_id(encoder, progress_settings, api.width)
+        if progress_settings.num_jitters != settings.num_jitters:
+            LOG.info(
+                "Reusing progress from num_jitters=%d; encoding pending/new images with num_jitters=%d; images: %s",
+                progress_settings.num_jitters,
+                settings.num_jitters,
+                store.counts(self.profile),
+            )
         self.processed = 0
 
     def analyze(self, info, data):
@@ -176,6 +188,8 @@ class Crawler:
     def run(self, category, once=False, max_articles=0, refresh_seconds=86400, pages=None):
         scope = json.dumps([self.api.wiki, category, pages or [], self.profile])
         count, started = 0, time.monotonic()
+        if not pages and self.store.scan(scope)["cursor"]:
+            LOG.info("Resuming saved category cursor; older article retries are processed separately")
         if pages:
             data = self.api.query(titles="|".join(pages), redirects=1, prop="info")
             members = data["query"].get("pages", [])
@@ -186,9 +200,16 @@ class Crawler:
             while not self.stop.is_set():
                 self.process_images(pool)
                 self.store.maintain()
-                for article in self.store.due_articles(scope):
+                scan = self.store.scan(scope)
+                # A backlog of slow failures must not delay the next category
+                # batch by dozens of API attempts. Still retry one per batch so
+                # old work is not starved during a long discovery pass.
+                retry_limit = 50 if scan["finished"] else 1
+                for article in self.store.due_articles(scope, retry_limit=retry_limit):
                     if self.stop.is_set():
                         raise Stopped()
+                    if article["status"] == "retry":
+                        LOG.info("Retrying older article (attempt %d): %s", article["attempts"] + 1, article["title"])
                     try:
                         images = self.api.images(article["page_id"])
                     except requests.exceptions.SSLError:
@@ -204,6 +225,10 @@ class Crawler:
                     if max_articles and count >= max_articles:
                         return
                 scan = self.store.scan(scope)
+                # Drain queued new work before advancing its saved cursor. At
+                # the end of a pass, also drain all currently due retries.
+                if self.store.due_articles(scope, limit=1, retry_limit=1 if scan["finished"] else 0):
+                    continue
                 if not scan["finished"]:
                     cursor = json.loads(scan["cursor"]) if scan["cursor"] else None
                     members, next_cursor = self.api.category_batch(category, cursor)
@@ -251,6 +276,9 @@ def main(argv=None):
     if args.max_articles < 0 or (args.page and len(args.page) > 50):
         parser.error("Use nonnegative --max-articles and at most 50 --page titles")
     settings = replace(settings, num_jitters=int(os.getenv("CRAWLER_NUM_JITTERS", str(settings.num_jitters))))
+    progress_num_jitters = int(os.getenv("CRAWLER_PROGRESS_NUM_JITTERS", str(settings.num_jitters)))
+    if progress_num_jitters < 1:
+        parser.error("CRAWLER_PROGRESS_NUM_JITTERS must be positive")
     database = args.database or Path(os.getenv("CRAWLER_DATABASE_PATH", str(ROOT / "face_embeddings.db")))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     stop = threading.Event()
@@ -271,7 +299,15 @@ def main(argv=None):
             width,
             settings.num_jitters,
         )
-        crawler = Crawler(WikiApi(http, args.wiki, width), store, encoder, settings, workers, stop)
+        crawler = Crawler(
+            WikiApi(http, args.wiki, width),
+            store,
+            encoder,
+            settings,
+            workers,
+            stop,
+            progress_num_jitters=progress_num_jitters,
+        )
         crawler.run(args.category, args.once, args.max_articles, refresh, args.page)
     except (Stopped, KeyboardInterrupt):
         LOG.info("Stopped. Committed results and pending work are retained.")

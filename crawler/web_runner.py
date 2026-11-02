@@ -191,6 +191,9 @@ def main(argv=None, archive=False):
     args = parser.parse_args(argv)
     settings = Settings.from_env("sqlite")
     settings = replace(settings, num_jitters=int(os.getenv("CRAWLER_NUM_JITTERS", str(settings.num_jitters))))
+    progress_num_jitters = int(os.getenv("CRAWLER_PROGRESS_NUM_JITTERS", str(settings.num_jitters)))
+    if progress_num_jitters < 1:
+        parser.error("CRAWLER_PROGRESS_NUM_JITTERS must be positive")
     workers = int(os.getenv("CRAWLER_DOWNLOAD_WORKERS", "3"))
     interval = float(os.getenv("CRAWLER_REQUEST_INTERVAL", "0.5"))
     backup_hours = float(os.getenv("CRAWLER_BACKUP_HOURS", "24"))
@@ -213,7 +216,15 @@ def main(argv=None, archive=False):
             free_mb * 1024 * 1024,
             backup_hours,
         )
-        crawler = Crawler(WikiApi(http), store, FaceEncoder(settings), settings, workers=workers, stop=stop)
+        crawler = Crawler(
+            WikiApi(http),
+            store,
+            FaceEncoder(settings),
+            settings,
+            workers=workers,
+            stop=stop,
+            progress_num_jitters=progress_num_jitters,
+        )
         source = CommonCrawlSource(http, args.index) if archive else WebSource(http)
         run_web(crawler, source, url, args.max_pages)
     except (Stopped, KeyboardInterrupt):

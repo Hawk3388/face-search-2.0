@@ -172,7 +172,9 @@ class WikiApi:
         """Generator includes template/gallery files and Commons imageinfo.
 
         Commons files can carry 'missing' on the local wiki despite valid imageinfo.
-        Never discard those. Honour *all* continuation keys, not just gimcontinue.
+        Never discard those. Imageinfo can also paginate *file revisions* via
+        iistart. If that happens, separate file discovery from current metadata
+        instead of walking upload history (which can repeat timestamps).
         """
         cursor, seen, images = {}, set(), {}
         while True:
@@ -182,22 +184,16 @@ class WikiApi:
                 gimlimit=50,
                 prop="imageinfo",
                 iiprop="url|sha1|timestamp|mime|size",
+                iilimit=1,
                 iiurlwidth=self.width,
                 redirects=1,
                 **cursor,
             )
-            for page in data["query"].get("pages", []):
-                infos = page.get("imageinfo", [])
-                if not infos:
-                    # Truly unavailable/deleted files have no bytes to fetch.
-                    continue
-                info = infos[0]
-                if not info.get("mime", "").startswith("image/"):
-                    continue
-                url = info.get("url")
-                if not url or not info.get("sha1"):
-                    raise ValueError("Incomplete image metadata; article remains pending")
-                images[url] = {**info, "title": page["title"], "download_url": info.get("thumburl", url)}
+            if "iistart" in data.get("continue", {}):
+                # Do not simply drop iistart here: the generator may be holding
+                # back later file batches until property pagination completes.
+                return self._current_images(page_id)
+            self._collect_images(data, images)
             cursor = data.get("continue")
             if not cursor:
                 return list(images.values())
@@ -205,3 +201,63 @@ class WikiApi:
             if marker in seen:
                 raise ValueError("Repeated MediaWiki continuation token")
             seen.add(marker)
+
+    @staticmethod
+    def _collect_images(data, images):
+        for page in data["query"].get("pages", []):
+            infos = page.get("imageinfo", [])
+            if not infos:
+                # Commons files marked locally missing can still have imageinfo.
+                continue
+            info = infos[0]
+            if not info.get("mime", "").startswith("image/"):
+                continue
+            url = info.get("url")
+            if not url or not info.get("sha1"):
+                raise ValueError("Incomplete image metadata; article remains pending")
+            images.setdefault(url, {**info, "title": page["title"], "download_url": info.get("thumburl", url)})
+
+    def _current_images(self, page_id):
+        """Enumerate every file first; query only its current version in batches.
+
+        Separating these requests prevents file-history pagination from hiding
+        later generator batches. No article is committed after a partial failure.
+        """
+        cursor, seen, titles = {}, set(), {}
+        while True:
+            data = self.query(pageids=page_id, prop="images", imlimit=50, redirects=1, **cursor)
+            for page in data["query"].get("pages", []):
+                for file in page.get("images", []):
+                    titles[file["title"]] = None
+            cursor = data.get("continue")
+            if not cursor:
+                break
+            marker = repr(sorted(cursor.items()))
+            if marker in seen:
+                raise ValueError("Repeated MediaWiki image-list continuation token")
+            seen.add(marker)
+
+        images, titles = {}, list(titles)
+        for start in range(0, len(titles), 50):
+            cursor, seen = {}, set()
+            while True:
+                data = self.query(
+                    titles="|".join(titles[start : start + 50]),
+                    prop="imageinfo",
+                    iiprop="url|sha1|timestamp|mime|size",
+                    iilimit=1,
+                    iiurlwidth=self.width,
+                    redirects=1,
+                    **cursor,
+                )
+                self._collect_images(data, images)
+                # iistart asks for OLD uploads, not additional article images.
+                # Keep iicontinue (additional files' metadata) if present.
+                cursor = {key: value for key, value in data.get("continue", {}).items() if key != "iistart"}
+                if not any(key != "continue" for key in cursor):
+                    break
+                marker = repr(sorted(cursor.items()))
+                if marker in seen:
+                    raise ValueError("Repeated MediaWiki imageinfo continuation token")
+                seen.add(marker)
+        return list(images.values())

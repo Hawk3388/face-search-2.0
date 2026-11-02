@@ -109,12 +109,25 @@ class CrawlStore:
         with self.conn:
             self.conn.execute("UPDATE crawler_scans SET cursor=NULL,finished=0 WHERE scope=?", (scope,))
 
-    def due_articles(self, scope, limit=50):
-        return self.conn.execute(
+    def due_articles(self, scope, limit=50, retry_limit=None):
+        """New work first; optionally allow a separate bounded retry budget."""
+        pending = self.conn.execute(
             """SELECT * FROM crawler_articles WHERE scope=?
-            AND status!='done' AND retry_at<=? ORDER BY retry_at,page_id LIMIT ?""",
+            AND status='pending' AND retry_at<=? ORDER BY retry_at,page_id LIMIT ?""",
             (scope, time.time(), limit),
         ).fetchall()
+        if retry_limit is None:
+            retry_limit = max(0, limit - len(pending))
+        retries = (
+            self.conn.execute(
+                """SELECT * FROM crawler_articles WHERE scope=?
+            AND status='retry' AND retry_at<=? ORDER BY retry_at,page_id LIMIT ?""",
+                (scope, time.time(), retry_limit),
+            ).fetchall()
+            if retry_limit
+            else []
+        )
+        return pending + retries
 
     def discover(self, scope, article, page_url, images, profile):
         """No-face and failed images stay in the queue independently of article progress."""
