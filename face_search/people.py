@@ -1,6 +1,7 @@
 """Rank Wikipedia person articles by support from distinct result images."""
 
 from collections import defaultdict
+from math import fsum, isclose, isfinite
 import re
 import ssl
 from urllib.parse import unquote, urlsplit
@@ -17,6 +18,7 @@ ITEM_ID = re.compile(r"Q[1-9][0-9]*")
 USER_AGENT = "FaceSearchBot/2.0 (https://github.com/Hawk3388/face-search-2.0)"
 MAX_ARTICLES = 50
 MAX_WIKIS = 4
+DISTANCE_WEIGHT_SCALE = 0.02
 
 
 def wikipedia_article(url):
@@ -115,9 +117,13 @@ def wikipedia_people(articles):
     return people
 
 
-def suggest_person(entries, lookup=wikipedia_people):
-    article_images = defaultdict(set)
-    for entry in entries:
+def suggest_person(matches, lookup=wikipedia_people):
+    """Rank people by distance-weighted support from distinct images."""
+    article_images = defaultdict(dict)
+    for match in matches:
+        entry, distance = match if isinstance(match, (list, tuple)) else (match, match.get("distance"))
+        if not isinstance(distance, (int, float)) or not isfinite(distance) or distance < 0:
+            continue
         try:
             image_url = normalize_image_url(entry.get("image_url"))
         except ValueError:
@@ -126,25 +132,33 @@ def suggest_person(entries, lookup=wikipedia_people):
             continue
         for page in entry.get("page_urls") or [entry.get("page_url")]:
             if article := wikipedia_article(page):
-                article_images[article].add(image_url)
+                images = article_images[article]
+                images[image_url] = min(distance, images.get(image_url, distance))
                 if len(article_images) > MAX_ARTICLES:
                     return None
     if len(set().union(*article_images.values())) < 2:
         return None
 
     people = lookup(tuple(sorted(article_images)))
-    person_images = defaultdict(set)
+    person_images = defaultdict(dict)
     names = {}
     for article, images in article_images.items():
         if article in people:
             item, name = people[article]
-            person_images[item].update(images)
+            distinct_images = person_images[item]
+            for image_url, distance in images.items():
+                distinct_images[image_url] = min(distance, distinct_images.get(image_url, distance))
             names[item] = name
-    ranks = sorted(person_images, key=lambda item: len(person_images[item]), reverse=True)
+    # At distance 0.02 an image weighs twice as much as one at 0.06.
+    scores = {
+        item: fsum(1 / (1 + distance / DISTANCE_WEIGHT_SCALE) for distance in images.values())
+        for item, images in person_images.items()
+    }
+    ranks = sorted(scores, key=scores.get, reverse=True)
     if not ranks:
         return None
     first = ranks[0]
     support = len(person_images[first])
-    if support < 2 or (len(ranks) > 1 and len(person_images[ranks[1]]) == support):
+    if support < 2 or (len(ranks) > 1 and isclose(scores[first], scores[ranks[1]])):
         return None
     return names[first], support

@@ -99,10 +99,7 @@ def render_results(response, use_server):
         st.error("😕 No similar faces found.")
         return
     try:
-        suggestion = suggest_person(
-            (match[0] if isinstance(match, (list, tuple)) else match for match in matches),
-            lookup=cached_wikipedia_people,
-        )
+        suggestion = suggest_person(matches, lookup=cached_wikipedia_people)
     except (requests.RequestException, ValueError, KeyError):
         suggestion = None
     if suggestion:

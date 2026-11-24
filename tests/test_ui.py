@@ -98,6 +98,30 @@ def test_name_votes_merge_language_versions_without_counting_an_image_twice():
     assert suggest_person(matches + [result(4, OTHER)], lookup=people) is None
 
 
+def test_closer_images_can_outweigh_more_distant_images():
+    matches = [
+        [result(1, EN), 0.02],
+        result(2, DE, distance=0.02),
+        *(result(i, OTHER, distance=0.06) for i in (3, 4, 5)),
+    ]
+    assert suggest_person(matches, lookup=people) == ("Example Person", 2)
+
+
+def test_weighting_uses_only_best_distance_per_person_and_image():
+    matches = [
+        result(1, EN, distance=0.06),
+        result(1, DE, distance=0.01),
+        result(2, EN, distance=0.06),
+        result(3, OTHER, distance=0.03),
+        result(4, OTHER, distance=0.03),
+    ]
+    assert suggest_person(matches, lookup=people) == ("Example Person", 2)
+    # Duplicating A's stronger image cannot inflate A's score.
+    assert suggest_person(
+        matches[:3] + [matches[1], result(3, OTHER, distance=0.02), result(4, OTHER, distance=0.02)], lookup=people
+    ) == ("Another Person", 2)
+
+
 def test_one_distinct_image_needs_no_lookup():
     def unexpected_lookup(_):
         raise AssertionError("One distinct image must not trigger a lookup")
