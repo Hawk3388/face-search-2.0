@@ -4,18 +4,12 @@ import time
 import requests
 
 
-def download_image(
-    url, session=None, max_bytes=10 * 1024 * 1024, attempts=3, *, timeout=(10, 30), allow_redirects=True, headers=None
-):
+def download_image(url, session=None, max_bytes=10 * 1024 * 1024, attempts=3):
     client = session or requests
     for attempt in range(attempts):
         try:
-            with client.get(
-                url, timeout=timeout, stream=True, allow_redirects=allow_redirects, headers=headers
-            ) as response:
+            with client.get(url, timeout=(10, 30), stream=True) as response:
                 response.raise_for_status()
-                if not allow_redirects and 300 <= response.status_code < 400:
-                    raise ValueError("Unexpected image redirect")
                 if int(response.headers.get("Content-Length", 0)) > max_bytes:
                     raise ValueError("Remote image exceeds download limit")
                 chunks, length = [], 0

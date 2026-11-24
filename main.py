@@ -2,7 +2,6 @@
 
 import hashlib
 import os
-from io import BytesIO
 from pathlib import Path
 from threading import Lock
 from urllib.parse import quote, unquote, urlsplit
@@ -12,7 +11,6 @@ import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
 from face_search.config import Settings
-from face_search.download import download_image
 from face_search.encoding import FaceEncoder, load_image
 from face_search.search import SearchIndex
 from face_search.storage import read_records
@@ -85,27 +83,6 @@ def api_call(api_url, token, endpoint, **kwargs):
         return data
 
 
-@st.cache_data(ttl=600, max_entries=128, show_spinner=False)
-def wikimedia_preview(url):
-    """Embed a bounded Wikimedia image, or render the original unavailable card."""
-    try:
-        data = download_image(
-            url,
-            attempts=1,
-            timeout=(3, 5),
-            allow_redirects=False,
-            headers={"User-Agent": "FaceSearchBot/2.0 (https://github.com/Hawk3388/face-search-2.0)"},
-        )
-        preview = Image.fromarray(load_image(data))
-        preview.thumbnail((250, 1200))
-    except (requests.RequestException, ValueError, OSError):
-        preview = Image.new("RGB", (250, 200), color="lightgray")
-        ImageDraw.Draw(preview).text((10, 90), "Image not\navailable", fill="darkgray")
-    with BytesIO() as output:
-        preview.save(output, format="PNG")
-        return output.getvalue()
-
-
 def render_results(response, use_server):
     matches = response.get("matches", [])
     if not matches:
@@ -131,14 +108,7 @@ def render_results(response, use_server):
         if links:
             st.markdown("  \n".join(links))
         if image_url:
-            parsed = urlsplit(image_url)
-            if parsed.scheme in ("http", "https") and parsed.netloc.lower() in (
-                "upload.wikimedia.org",
-                "thumb.wikimedia.org",
-            ):
-                st.image(wikimedia_preview(parsed._replace(scheme="https").geturl()), width=250)
-            else:
-                st.image(image_url, width=250)
+            st.image(image_url, width=250)
 
 
 def main():
@@ -189,25 +159,26 @@ def main():
     try:
         if st.session_state.get("query_key") != key:
             image = load_image(data, settings.max_upload_bytes, settings.max_pixels)
-            if use_server:
-                endpoint = "analyze" if "analyze" in health.get("capabilities", []) else "search"
-                query = api_call(
-                    api_url,
-                    token,
-                    endpoint,
-                    files={"image": (uploaded.name, data, uploaded.type or "application/octet-stream")},
-                )
-                if endpoint == "search":
-                    query["legacy_response"] = dict(query)
-            else:
-                with encode_lock:
-                    locations, vectors = encoder.extract(image)
-                query = dict(
-                    face_locations=locations,
-                    encodings=[v.tolist() for v in vectors],
-                    face_count=len(vectors),
-                    model_id=encoder.model_id,
-                )
+            with st.spinner("Detecting faces..."):
+                if use_server:
+                    endpoint = "analyze" if "analyze" in health.get("capabilities", []) else "search"
+                    query = api_call(
+                        api_url,
+                        token,
+                        endpoint,
+                        files={"image": (uploaded.name, data, uploaded.type or "application/octet-stream")},
+                    )
+                    if endpoint == "search":
+                        query["legacy_response"] = dict(query)
+                else:
+                    with encode_lock:
+                        locations, vectors = encoder.extract(image)
+                    query = dict(
+                        face_locations=locations,
+                        encodings=[v.tolist() for v in vectors],
+                        face_count=len(vectors),
+                        model_id=encoder.model_id,
+                    )
             query["image"] = image
             st.session_state.query = query
             st.session_state.query_key = key
@@ -216,8 +187,7 @@ def main():
         query = st.session_state.query
         count = query.get("face_count", 0)
         caption = f"Uploaded image - {count} face(s) detected" if count else "Uploaded image - No faces detected"
-        preview = draw_face_boxes(query["image"], query.get("face_locations", [])) if count else BytesIO(data)
-        st.image(preview, caption=caption, width="stretch")
+        st.image(draw_face_boxes(query["image"], query.get("face_locations", [])), caption=caption, width="stretch")
         if not count:
             st.warning("❌ No face detected in the image.")
             return
@@ -232,31 +202,32 @@ def main():
             return
         st.info(f"🔎 Searching for Face {selected + 1}..." if count > 1 else "🔎 Searching for similar faces...")
         if selected not in st.session_state.search_results:
-            if use_server and "encodings" in query:
-                response = api_call(
-                    api_url,
-                    token,
-                    "search",
-                    json={
-                        "encoding": query["encodings"][selected],
-                        "model_id": query["model_id"],
-                        "format": "objects",
-                    },
-                )
-            elif use_server:
-                response = api_call(
-                    api_url,
-                    token,
-                    "search",
-                    data={"selected_face": selected},
-                    files={"image": (uploaded.name, data, uploaded.type)},
-                )
-            else:
-                matches, _ = index.search(
-                    query["encodings"][selected], settings.tolerance, min(20, settings.max_results), settings.metric
-                )
-                response = {"matches": matches}
-            st.session_state.search_results[selected] = response
+            with st.spinner("Searching..."):
+                if use_server and "encodings" in query:
+                    response = api_call(
+                        api_url,
+                        token,
+                        "search",
+                        json={
+                            "encoding": query["encodings"][selected],
+                            "model_id": query["model_id"],
+                            "format": "objects",
+                        },
+                    )
+                elif use_server:
+                    response = api_call(
+                        api_url,
+                        token,
+                        "search",
+                        data={"selected_face": selected},
+                        files={"image": (uploaded.name, data, uploaded.type)},
+                    )
+                else:
+                    matches, _ = index.search(
+                        query["encodings"][selected], settings.tolerance, min(20, settings.max_results), settings.metric
+                    )
+                    response = {"matches": matches}
+                st.session_state.search_results[selected] = response
         render_results(st.session_state.search_results[selected], use_server)
     except (requests.RequestException, ValueError, OSError, RuntimeError) as exc:
         st.error(f"Search failed: {exc}")
