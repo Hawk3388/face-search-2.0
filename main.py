@@ -93,16 +93,20 @@ def render_results(response, use_server):
         st.error("😕 No similar faces found.")
         return
     st.success(f"✅ {len(matches)} matches found!")
-    for match in matches:
+    for position, match in enumerate(matches):
+        if position:
+            st.divider()
         if isinstance(match, (list, tuple)):
             entry, distance = match
         else:
             entry, distance = match, match["distance"]
+        image_url = entry.get("image_url")
+        if image_url:
+            st.image(image_url, width=250)
         score = f"**Distance**: {distance:.4f}"
         if use_server and not isinstance(match, (list, tuple)) and match.get("similarity") is not None:
             score += f" | **Similarity**: {match['similarity']:.3f}"
         st.markdown(score)
-        image_url = entry.get("image_url")
         pages = entry.get("page_urls") or [entry.get("page_url")]
         links = []
         for label, url in [("View image", image_url), *(("Visit page", page) for page in pages)]:
@@ -111,8 +115,6 @@ def render_results(response, use_server):
                 links.append(f"[{label}](<{target}>)")
         if links:
             st.markdown("  \n".join(links))
-        if image_url:
-            st.image(image_url, width=250)
 
 
 def main():
