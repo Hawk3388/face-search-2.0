@@ -84,7 +84,11 @@ def api_call(api_url, token, endpoint, **kwargs):
 
 
 def render_results(response, use_server):
-    matches = response.get("matches", [])
+    matches = [
+        match
+        for match in response.get("matches", [])
+        if (match[1] if isinstance(match, (list, tuple)) else match["distance"]) <= 0.6
+    ]
     if not matches:
         st.error("😕 No similar faces found.")
         return
