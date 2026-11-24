@@ -1,3 +1,4 @@
+import asyncio
 import hmac
 import json
 import logging
@@ -5,7 +6,7 @@ import math
 import sqlite3
 import time
 from collections import OrderedDict, deque
-from contextlib import asynccontextmanager, closing
+from contextlib import asynccontextmanager, closing, suppress
 from pathlib import Path
 from threading import Lock
 
@@ -20,9 +21,10 @@ from starlette.exceptions import HTTPException
 from .config import ROOT, DLIB_MODEL, Settings
 from .encoding import FaceEncoder, load_image
 from .search import SearchIndex
-from .storage import read_records
+from .storage import read_records, read_sqlite
 
 log = logging.getLogger(__name__)
+SNAPSHOT_CHECK_SECONDS = 30
 
 
 def boolean(value, name):
@@ -49,27 +51,73 @@ class SearchService:
     def __init__(self, settings, encoder=None):
         self.settings = settings
         self.encoder = encoder or FaceEncoder(settings)
-        self.index = None
+        self.loaded = (None, None)
         self.reload_lock = Lock()
         self.encode_lock = Lock()
         self.last_reload_failed = False
 
-    def reload(self):
+    @property
+    def index(self):
+        return self.loaded[0]
+
+    @staticmethod
+    def file_version(path):
+        stat = path.stat()
+        return stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size
+
+    def sources(self):
+        directory = self.settings.crawler_snapshots
+        if directory is None:
+            return [(self.settings.database, "configured", None)]
+        sources = []
+        for name in ("crawler-final", "crawler-daily"):
+            path = directory / f"{name}.db"
+            try:
+                version = self.file_version(path)
+            except FileNotFoundError:
+                continue
+            sources.append((path, name, version))
+        if not sources:
+            raise FileNotFoundError(f"No crawler snapshots have arrived in {directory}")
+        return sources
+
+    def reload(self, *, only_if_changed=False):
         with self.reload_lock:
             try:
-                index = SearchIndex.build(
-                    read_records(self.settings.database, self.settings.backend),
-                    self.encoder.model_id,
-                    self.encoder.dimension,
-                )
-                if not index.entries:
-                    raise ValueError("No embeddings for the configured model in this database")
+                sources = self.sources()
+                for position, source in enumerate(sources):
+                    if only_if_changed and self.loaded[1] == source:
+                        self.last_reload_failed = position > 0
+                        return len(self.index.entries)
+                    path, name, version = source
+                    try:
+                        # Published files contain all committed pages. The sender
+                        # replaces complete files by rename, never in place.
+                        records = (
+                            read_sqlite(path, immutable=True)
+                            if version is not None
+                            else read_records(path, self.settings.backend)
+                        )
+                        with closing(records):
+                            index = SearchIndex.build(records, self.encoder.model_id, self.encoder.dimension)
+                        if not index.entries:
+                            raise ValueError("No embeddings for the configured model in this database")
+                        if version is not None and self.file_version(path) != version:
+                            raise OSError("Crawler snapshot changed during loading; retrying on the next check")
+                    except Exception:
+                        current = self.loaded[1]
+                        if (current and current[1] == "crawler-final") or position == len(sources) - 1:
+                            raise
+                        log.exception("Cannot load %s; trying the daily crawler backup", name)
+                        continue
+                    self.loaded = (index, source)
+                    self.last_reload_failed = position > 0
+                    if version is not None:
+                        log.info("Loaded %s with %d embeddings", name, len(index.entries))
+                    return len(index.entries)
             except Exception:
                 self.last_reload_failed = True
                 raise
-            self.index = index
-            self.last_reload_failed = False
-        return len(index.entries)
 
     def analyze(self, data):
         if not self.encode_lock.acquire(blocking=False):
@@ -168,13 +216,31 @@ def create_app(backend="sqlite", settings=None, encoder=None, stats_path=None):
     service = SearchService(settings, encoder)
     stats = RequestStats(stats_path or ROOT / "request_stats.db")
 
+    async def watch_crawler_snapshots():
+        while True:
+            await asyncio.sleep(SNAPSHOT_CHECK_SECONDS)
+            try:
+                await run_in_threadpool(service.reload, only_if_changed=True)
+            except FileNotFoundError:
+                # The first transfer may arrive after startup.
+                continue
+            except Exception:
+                log.exception("Crawler snapshot reload failed; retaining the current index")
+
     @asynccontextmanager
     async def lifespan(app):
         try:
             await run_in_threadpool(service.reload)
         except Exception:
             log.exception("Search database not ready; /reload can retry after repair")
-        yield
+        watcher = asyncio.create_task(watch_crawler_snapshots()) if settings.crawler_snapshots is not None else None
+        try:
+            yield
+        finally:
+            if watcher is not None:
+                watcher.cancel()
+                with suppress(asyncio.CancelledError):
+                    await watcher
 
     app = FastAPI(
         title="Face Search API",
@@ -361,12 +427,13 @@ def create_app(backend="sqlite", settings=None, encoder=None, stats_path=None):
     @app.get("/health", openapi_extra={"security": []})
     @app.head("/health", include_in_schema=False)
     def health():
-        index = service.index
+        index, source = service.loaded
         last_page = next((e["page_url"] for e in reversed(index.entries) if e.get("page_url")), None) if index else None
         return JSONResponse(
             dict(
                 status="healthy" if index else "unavailable",
                 database_loaded=index is not None,
+                database_source=source[1] if source else None,
                 total_entries=len(index.entries) if index else 0,
                 last_page_url=last_page,
                 model_id=service.encoder.model_id,
@@ -380,10 +447,13 @@ def create_app(backend="sqlite", settings=None, encoder=None, stats_path=None):
 
     @app.get("/stats", dependencies=secured)
     def statistics():
-        index = service.index
+        index, source = service.loaded
         count = stats.update()
         entries = index.entries if index else ()
-        size = settings.database.stat().st_size if settings.database.exists() else 0
+        if source and source[2] is not None:
+            size = source[2][-1]
+        else:
+            size = settings.database.stat().st_size if settings.database.exists() else 0
         return dict(
             total_entries=len(entries),
             total_images=len({e.get("image_url") for e in entries}),

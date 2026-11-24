@@ -17,8 +17,9 @@ from .search import validate_embedding
 SCHEMA_VERSION = 2
 
 
-def connect_readonly(path):
-    return sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True, timeout=30)
+def connect_readonly(path, *, immutable=False):
+    options = "?mode=ro&immutable=1" if immutable else "?mode=ro"
+    return sqlite3.connect(Path(path).resolve().as_uri() + options, uri=True, timeout=30)
 
 
 def backup_database(path):
@@ -118,8 +119,8 @@ def decode_legacy(blob):
     return validate_embedding(np.frombuffer(blob, dtype=dtype), 128)
 
 
-def read_sqlite(path):
-    with closing(connect_readonly(path)) as conn:
+def read_sqlite(path, *, immutable=False):
+    with closing(connect_readonly(path, immutable=immutable)) as conn:
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         pages = {}
         for image_id, url in conn.execute("SELECT image_id, page_url FROM wiki_pages ORDER BY rowid"):

@@ -22,6 +22,7 @@ class Settings:
     max_results: int = 100
     num_jitters: int = 10
     requests_per_minute: int = 120
+    crawler_snapshots: Path | None = None
 
     def __post_init__(self):
         import math
@@ -45,6 +46,7 @@ class Settings:
         if metric not in ("euclidean", "cosine"):
             raise ValueError("SEARCH_METRIC must be euclidean or cosine")
         filename = "face_embeddings.db" if backend == "sqlite" else "face_embeddings.json"
+        snapshots = os.getenv("SERVER_CRAWLER_SNAPSHOTS") if backend == "sqlite" else None
         return cls(
             database=Path(os.getenv("DATABASE_PATH", str(ROOT / filename))).resolve(),
             backend=backend,
@@ -60,4 +62,5 @@ class Settings:
             max_results=int(os.getenv("MAX_RESULTS", "100")),
             num_jitters=int(os.getenv("NUM_JITTERS", "10")),
             requests_per_minute=int(os.getenv("REQUESTS_PER_MINUTE", "120")),
+            crawler_snapshots=Path(snapshots).expanduser().resolve() if snapshots else None,
         )

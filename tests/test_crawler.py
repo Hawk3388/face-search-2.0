@@ -17,7 +17,7 @@ from crawler.wiki_api import HttpClient, WikiApi, retry_delay
 from crawler.wiki_runner import Crawler
 from crawler.wiki_store import CrawlStore
 from face_search.config import DLIB_MODEL, Settings
-from face_search.storage import ensure_schema
+from face_search.storage import backup_database, connect_readonly, ensure_schema
 
 
 class FakeHttp:
@@ -306,7 +306,12 @@ def test_low_disk_stops_before_creating_database(tmp_path, monkeypatch):
 
 def test_periodic_backup_requires_data_changes_and_elapsed_time(store, monkeypatch):
     calls = []
-    monkeypatch.setattr("crawler.wiki_store.backup_database", lambda path: calls.append(path))
+
+    def counted_backup(path):
+        calls.append(path)
+        return backup_database(path)
+
+    monkeypatch.setattr("crawler.wiki_store.backup_database", counted_backup)
     store.last_backup -= store.backup_seconds + 1
     article(store)
     store.complete_image(store.due_images("p")[0], [], {})
@@ -318,6 +323,121 @@ def test_periodic_backup_requires_data_changes_and_elapsed_time(store, monkeypat
     assert len(calls) == 1
     store.maintain()
     assert len(calls) == 1
+
+
+def test_crawler_keeps_one_verified_backup_across_restarts_and_periodic_wal_writes(tmp_path):
+    path = tmp_path / "faces[1].db"
+    ensure_schema(path)
+    older = [backup_database(path), backup_database(path)]
+    other_db = tmp_path / "other.db"
+    ensure_schema(other_db)
+    unrelated = backup_database(other_db)
+    archive = tmp_path / "faces[1].db.backup-manual"
+    archive.write_bytes(b"manual archive")
+
+    def snapshots():
+        return [p for p in tmp_path.iterdir() if p.name.startswith(path.name + ".backup-") and p != archive]
+
+    for iteration in range(2):
+        store = CrawlStore(path, min_free_bytes=0)
+        try:
+            assert len(snapshots()) == 1
+            assert all(not old.exists() for old in older)
+            initial_backup = snapshots()[0]
+            # Keep committed changes in WAL to verify the replacement includes them.
+            store.conn.execute("PRAGMA wal_autocheckpoint=0")
+            article(store, metadata={**info(), "url": f"https://example.org/{iteration}.jpg"})
+            store.complete_image(store.due_images("p")[0], [{"embedding": np.ones(128)}], {})
+            store.last_backup -= store.backup_seconds + 1
+            store.maintain()
+            assert len(snapshots()) == 1 and not initial_backup.exists()
+            with closing(sqlite3.connect(snapshots()[0])) as copy:
+                assert copy.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+                assert copy.execute("SELECT count(*) FROM faces").fetchone()[0] == iteration + 1
+            assert store.conn.execute("SELECT count(*) FROM faces").fetchone()[0] == iteration + 1
+            assert unrelated.exists() and archive.read_bytes() == b"manual archive"
+        finally:
+            store.close()
+
+
+@pytest.mark.parametrize("error", [OSError("disk full"), RuntimeError("Backup verification failed")])
+def test_failed_crawler_backup_preserves_all_existing_snapshots(tmp_path, monkeypatch, error):
+    path = tmp_path / "existing.db"
+    ensure_schema(path)
+    backups = [backup_database(path), backup_database(path)]
+    original = path.read_bytes()
+    backup_bytes = {p: p.read_bytes() for p in backups}
+
+    def fail(path):
+        raise error
+
+    monkeypatch.setattr("crawler.wiki_store.backup_database", fail)
+    with pytest.raises(type(error), match=str(error)):
+        CrawlStore(path, min_free_bytes=0)
+    assert path.read_bytes() == original
+    assert all(p.read_bytes() == data for p, data in backup_bytes.items())
+
+
+def test_failed_periodic_backup_keeps_previous_snapshot_and_dirty_state(store, monkeypatch):
+    previous = backup_database(store.path)
+    original = previous.read_bytes()
+    article(store)
+    store.complete_image(store.due_images("p")[0], [{"embedding": np.ones(128)}], {})
+    store.last_backup -= store.backup_seconds + 1
+    last_backup = store.last_backup
+
+    def fail(path):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("crawler.wiki_store.backup_database", fail)
+    with pytest.raises(OSError, match="disk full"):
+        store.maintain()
+    assert previous.read_bytes() == original
+    assert store.dirty and store.last_backup == last_backup
+    assert store.conn.execute("SELECT count(*) FROM faces").fetchone()[0] == 1
+
+
+def test_backup_cleanup_failure_keeps_verified_replacement(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    path = tmp_path / "existing.db"
+    ensure_schema(path)
+    old = backup_database(path)
+    original_unlink = Path.unlink
+
+    def deny_old(candidate, *args, **kwargs):
+        if candidate == old:
+            raise PermissionError("backup locked")
+        return original_unlink(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", deny_old)
+    with pytest.raises(OSError, match="Verified backup retained.*cannot remove old backup"):
+        CrawlStore(path, min_free_bytes=0)
+    copies = list(tmp_path.glob("existing.db.backup-*"))
+    assert len(copies) == 2 and old in copies
+    for copy in copies:
+        with closing(sqlite3.connect(copy)) as conn:
+            assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_crawler_migration_keeps_one_pre_migration_snapshot(tmp_path):
+    path = tmp_path / "legacy.db"
+    with closing(sqlite3.connect(path)) as conn:
+        conn.execute("CREATE TABLE images(id INTEGER PRIMARY KEY, image_url TEXT UNIQUE, phash TEXT, embedding BLOB)")
+        conn.execute("CREATE TABLE wiki_pages(image_id INTEGER, page_url TEXT, PRIMARY KEY(image_id,page_url))")
+        conn.execute("INSERT INTO images VALUES (1,'https://example.org/a.jpg',NULL,?)", (np.ones(128).tobytes(),))
+        conn.commit()
+    older = backup_database(path)
+    store = CrawlStore(path, min_free_bytes=0)
+    try:
+        backups = list(tmp_path.glob("legacy.db.backup-*"))
+        assert len(backups) == 1 and not older.exists()
+        with closing(sqlite3.connect(backups[0])) as copy:
+            assert copy.execute("SELECT count(*) FROM images").fetchone()[0] == 1
+            assert not copy.execute("SELECT name FROM sqlite_master WHERE name='faces'").fetchone()
+        assert store.conn.execute("SELECT count(*) FROM faces").fetchone()[0] == 1
+    finally:
+        store.close()
 
 
 def image_bytes(width=100):
@@ -416,7 +536,7 @@ def test_pipeline_persists_download_failure_then_recovers_without_recrawling_art
     assert not store.due_articles("scope")
 
 
-def test_one_pass_processes_final_category_batch(store):
+def test_default_run_processes_final_category_batch_and_exits(store):
     http = FakeHttp(
         [
             {"query": {"categorymembers": [{"pageid": 4, "title": "Person"}]}},
@@ -425,8 +545,42 @@ def test_one_pass_processes_final_category_batch(store):
         ]
     )
     crawler = Crawler(WikiApi(http), store, Encoder(), Settings(store.path), workers=1)
-    crawler.run("Category:People", once=True)
+    crawler.run("Category:People")
     assert store.counts(crawler.profile) == {"done": 1}
+
+
+@pytest.mark.parametrize("max_articles", [0, 1])
+def test_full_publication_contains_final_embeddings_and_requires_category_end(tmp_path, monkeypatch, max_articles):
+    path = tmp_path / "publish.db"
+    ensure_schema(path)
+    uploads = []
+    monkeypatch.setattr("crawler.wiki_store.shutil.which", lambda name: name)
+
+    def rsync(args, **kwargs):
+        with closing(connect_readonly(args[-2], immutable=True)) as snapshot:
+            assert snapshot.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            count = snapshot.execute("SELECT count(*) FROM faces").fetchone()[0]
+        uploads.append((args[-1], count))
+
+    monkeypatch.setattr("crawler.wiki_store.run_subprocess", rsync)
+    store = CrawlStore(path, min_free_bytes=0, snapshot_target="user@server:/snapshots/")
+    try:
+        http = FakeHttp(
+            [
+                {"query": {"categorymembers": [{"pageid": 4, "title": "Person"}]}},
+                {"query": {"pages": [{"title": "File:Photo.jpg", "imageinfo": [info()]}]}},
+                image_bytes(400),
+            ]
+        )
+        crawler = Crawler(WikiApi(http), store, Encoder(), Settings(path), workers=1)
+        crawler.run("Category:People", max_articles=max_articles)
+        expected = [("user@server:/snapshots/crawler-daily.db", 0)]
+        if not max_articles:
+            expected.append(("user@server:/snapshots/crawler-final.db", 1))
+        assert uploads == expected
+        assert len(list(tmp_path.glob("publish.db.backup-*"))) == 1
+    finally:
+        store.close()
 
 
 def test_old_article_retries_do_not_block_next_category_batch(store, caplog):

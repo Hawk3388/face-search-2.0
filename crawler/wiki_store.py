@@ -1,19 +1,29 @@
 """Durable crawl queue, additive tables and verified backups before writes."""
 
 import json
+import logging
+import re
 import shutil
 import sqlite3
 import time
 from pathlib import Path
+from subprocess import DEVNULL, SubprocessError, run as run_subprocess
 
 from filelock import FileLock
 
 from face_search.storage import backup_database, ensure_schema, insert_face
 
+LOG = logging.getLogger(__name__)
+
 
 class CrawlStore:
-    def __init__(self, path, min_free_bytes=512 * 1024 * 1024, backup_hours=24):
+    def __init__(self, path, min_free_bytes=512 * 1024 * 1024, backup_hours=24, *, snapshot_target=None):
         self.path = Path(path).resolve()
+        self.snapshot_target = snapshot_target
+        self.pending_upload = None
+        self.next_upload = 0
+        if snapshot_target and not shutil.which("rsync"):
+            raise RuntimeError("Install rsync to use CRAWLER_SNAPSHOT_TARGET")
         self.lock = FileLock(str(self.path) + ".crawler.lock", timeout=0)
         self.lock.acquire()
         try:
@@ -35,7 +45,9 @@ class CrawlStore:
         if existed and backup is None:
             backup = backup_database(self.path)
         if backup:
+            self._retain_backup(backup)
             print(f"Verified database backup: {backup}", flush=True)
+            self.queue_upload(backup)
         self.conn = sqlite3.connect(self.path, timeout=30)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys=ON")
@@ -63,6 +75,42 @@ class CrawlStore:
                     url TEXT, profile TEXT, page_url TEXT, PRIMARY KEY(url,profile,page_url));
             """)
 
+    def _retain_backup(self, backup):
+        """Keep the newly verified snapshot; prune this database's older snapshots.
+
+        Called only after backup_database/ensure_schema succeeds. Never prune
+        before a replacement exists, or match other databases/custom archives.
+        """
+        backup = Path(backup)
+        pattern = re.compile(re.escape(self.path.name) + r"\.backup-\d{8}T\d{12}Z-[0-9a-f]{8}")
+        if (
+            backup.parent != self.path.parent
+            or not pattern.fullmatch(backup.name)
+            or backup.is_symlink()
+            or not backup.is_file()
+        ):
+            raise ValueError("Verified backup must be a regular snapshot beside the crawler database")
+        removed = 0
+        for candidate in self.path.parent.iterdir():
+            if (
+                candidate == backup
+                or not pattern.fullmatch(candidate.name)
+                or candidate.is_symlink()
+                or not candidate.is_file()
+            ):
+                continue
+            try:
+                candidate.unlink()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise OSError(
+                    f"Verified backup retained at {backup}; cannot remove old backup {candidate}: {exc}"
+                ) from exc
+            removed += 1
+        if removed:
+            print(f"Removed {removed} older database backups; retained: {backup}", flush=True)
+
     def check_space(self, backup=False):
         needed = self.min_free_bytes
         if backup:
@@ -76,10 +124,59 @@ class CrawlStore:
     def maintain(self):
         self.check_space()
         if self.dirty and time.monotonic() - self.last_backup >= self.backup_seconds:
-            self.check_space(backup=True)
-            print(f"Verified periodic backup: {backup_database(self.path)}", flush=True)
-            self.dirty = False
-            self.last_backup = time.monotonic()
+            backup = self.create_snapshot()
+            print(f"Verified periodic backup: {backup}", flush=True)
+            self.queue_upload(backup)
+        if self.pending_upload is not None and time.monotonic() >= self.next_upload:
+            try:
+                self.upload_snapshot(self.pending_upload, "daily")
+            except (OSError, SubprocessError) as exc:
+                self.next_upload = time.monotonic() + 300
+                LOG.warning("Daily backup transfer failed; retrying in 5 minutes: %s", exc)
+            else:
+                self.pending_upload = None
+
+    def create_snapshot(self):
+        self.check_space(backup=True)
+        backup = backup_database(self.path)
+        self._retain_backup(backup)
+        self.dirty = False
+        self.last_backup = time.monotonic()
+        return backup
+
+    def queue_upload(self, backup):
+        if self.snapshot_target:
+            self.pending_upload = backup
+            self.next_upload = 0
+
+    def upload_snapshot(self, backup, kind):
+        destination = f"{self.snapshot_target.rstrip('/')}/crawler-{kind}.db"
+        # Default rsync publication uses a temporary file and a rename after transfer.
+        run_subprocess(
+            [
+                "rsync",
+                "--ignore-times",
+                "-s",
+                "--timeout=60",
+                "-e",
+                "ssh -o BatchMode=yes -o ConnectTimeout=10",
+                "--",
+                str(backup),
+                destination,
+            ],
+            check=True,
+            stdin=DEVNULL,
+        )
+        LOG.info("Published %s crawler snapshot", kind)
+
+    def publish_final(self):
+        if self.snapshot_target:
+            backup = self.create_snapshot()
+            try:
+                self.upload_snapshot(backup, "final")
+            except (OSError, SubprocessError) as exc:
+                raise RuntimeError(f"Final snapshot saved at {backup}, but transfer failed; restart to retry") from exc
+            self.pending_upload = None
 
     def scan(self, scope):
         row = self.conn.execute("SELECT * FROM crawler_scans WHERE scope=?", (scope,)).fetchone()

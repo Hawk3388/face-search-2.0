@@ -1,7 +1,9 @@
 from dataclasses import replace
+from contextlib import closing
 from io import BytesIO
 import json
 import sqlite3
+import time
 
 import numpy as np
 import pytest
@@ -122,6 +124,52 @@ def test_unavailable_database_reports_503(tmp_path):
     with TestClient(app) as client:
         assert client.get("/health").status_code == 503
         assert post(client, {"encoding": vector().tolist()}).status_code == 503
+
+
+def test_server_follows_daily_snapshots_then_prefers_final(tmp_path, monkeypatch):
+    monkeypatch.setattr("face_search.api.SNAPSHOT_CHECK_SECONDS", 0.02)
+    settings = Settings(tmp_path / "unused.db", backend="sqlite", token="test-token", crawler_snapshots=tmp_path)
+    app = create_app(settings=settings, encoder=FakeEncoder(), stats_path=tmp_path / "stats.db")
+
+    def publish(name, count):
+        staged = tmp_path / "incoming.db"
+        ensure_schema(staged)
+        with closing(sqlite3.connect(staged)) as conn:
+            save_article(
+                conn, [{"image_url": f"https://example.org/{i}.jpg", "embedding": vector(i)} for i in range(count)]
+            )
+        staged.replace(tmp_path / f"crawler-{name}.db")
+
+    def wait_for(source, count):
+        deadline = time.monotonic() + 3
+        while True:
+            health = client.get("/health").json()
+            if (health["database_source"], health["total_entries"]) == (source, count):
+                return
+            assert time.monotonic() < deadline, health
+            time.sleep(0.015)
+
+    publish("daily", 1)
+    with TestClient(app) as client:
+        wait_for("crawler-daily", 1)
+        publish("daily", 2)
+        wait_for("crawler-daily", 2)
+        (tmp_path / "crawler-final.db").write_bytes(b"corrupt snapshot")
+        publish("daily", 3)
+        wait_for("crawler-daily", 3)
+        assert client.get("/health").json()["last_reload_failed"]
+        publish("final", 4)
+        wait_for("crawler-final", 4)
+        publish("daily", 5)
+        assert client.post("/reload", headers={"Authorization": "Bearer test-token"}).json()["entries"] == 4
+        assert (
+            post(client, {"encoding": vector(3).tolist(), "format": "objects"})
+            .json()["matches"][0]["image_url"]
+            .endswith("3.jpg")
+        )
+
+    with TestClient(app) as client:
+        wait_for("crawler-final", 4)
 
 
 def test_missing_token_fails_closed(tmp_path):

@@ -4,10 +4,11 @@ import hashlib
 import os
 from pathlib import Path
 from threading import Lock
+from urllib.parse import quote, unquote, urlsplit
 
 import requests
 import streamlit as st
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from face_search.config import Settings
 from face_search.encoding import FaceEncoder, load_image
@@ -59,8 +60,13 @@ def draw_face_boxes(image, face_locations):
     result = Image.fromarray(image).copy()
     draw = ImageDraw.Draw(result)
     for i, (top, right, bottom, left) in enumerate(face_locations):
+        font_size = max(12, min(bottom - top, right - left) // 4)
+        try:
+            font = ImageFont.truetype("arial.ttf", font_size)
+        except OSError:
+            font = ImageFont.load_default(size=font_size)
         draw.rectangle((left, top, right, bottom), outline="red", width=3)
-        draw.text((left, max(0, top - 15)), f"Face {i + 1}", fill="red")
+        draw.text((left, max(0, top - font_size - 5)), f"Face {i + 1}", fill="red", font=font)
     return result
 
 
@@ -77,31 +83,39 @@ def api_call(api_url, token, endpoint, **kwargs):
         return data
 
 
-def render_results(response):
+def render_results(response, use_server):
     matches = response.get("matches", [])
     if not matches:
-        st.info("No matching faces found at this distance threshold.")
+        st.error("😕 No similar faces found.")
         return
-    st.success(f"{len(matches)} matches found")
-    st.caption("Smaller distance means a closer match. Results are candidates, not proof of identity.")
+    st.success(f"✅ {len(matches)} matches found!")
     for match in matches:
         if isinstance(match, (list, tuple)):
             entry, distance = match
         else:
             entry, distance = match, match["distance"]
-        if entry.get("image_url"):
-            st.image(entry["image_url"], width=250)
-        st.write(f"Distance: {distance:.4f}")
-        if entry.get("image_url"):
-            st.link_button("View image", entry["image_url"])
-        for page in entry.get("page_urls") or ([entry["page_url"]] if entry.get("page_url") else []):
-            st.link_button("Source page", page)
-        st.divider()
+        score = f"**Distance**: {distance:.4f}"
+        if use_server and not isinstance(match, (list, tuple)) and match.get("similarity") is not None:
+            score += f" | **Similarity**: {match['similarity']:.3f}"
+        st.markdown(score)
+        image_url = entry.get("image_url")
+        pages = entry.get("page_urls") or [entry.get("page_url")]
+        links = []
+        for label, url in [("View image", image_url), *(("Visit page", page) for page in pages)]:
+            if isinstance(url, str) and url.lower().startswith(("https://", "http://")):
+                target = quote(url, safe=":/?#[]@!$&'()*+,;=%")
+                links.append(f"[{label}](<{target}>)")
+        if links:
+            st.markdown("  \n".join(links))
+        if image_url:
+            st.image(image_url, width=250)
 
 
 def main():
     st.set_page_config(page_title="Face Search", layout="centered")
-    st.title("Face Search")
+    title_column, stats_column = st.columns([3, 1])
+    with title_column:
+        st.title("🔍 Face Search")
     settings, api_url, token = configuration()
     health = get_health_stats(api_url)
     use_server = health is not None
@@ -117,20 +131,24 @@ def main():
         except Exception as exc:
             st.error(f"Unable to load local database: {exc}")
             st.stop()
-    with st.popover("Database statistics"):
-        st.write(f"Faces: {health.get('total_entries', 0) if use_server else len(index.entries):,}")
-        last_page = health.get("last_page_url") if use_server else None
+    with stats_column, st.popover("📊 Stats", help="Database statistics"):
+        st.markdown("**🌐 API Database**" if use_server else "**💻 Local Database**")
+        st.write(f"**Entries:** {health.get('total_entries', 0) if use_server else len(index.entries):,}")
+        last_page = (
+            health.get("last_page_url")
+            if use_server
+            else next((entry["page_url"] for entry in reversed(index.entries) if entry.get("page_url")), None)
+        )
         if last_page:
-            st.link_button("Last source page", last_page)
-    st.info("Using API server" if use_server else "Using local database")
-    st.caption("Uploaded images are processed for this search. Use Clear search to discard this session's query.")
-    generation = st.session_state.get("upload_generation", 0)
-    if st.button("Clear search"):
-        for key in ("query", "query_key", "selected_face", "search_results"):
-            st.session_state.pop(key, None)
-        st.session_state.upload_generation = generation + 1
-        st.rerun()
-    uploaded = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"], key=f"upload_{generation}")
+            page_name = unquote(urlsplit(last_page).path.rstrip("/").rsplit("/", 1)[-1]).replace("_", " ")
+            st.write(f"**Last Source Page:** {page_name}")
+            st.link_button("🔗 View Page", last_page)
+    st.info(
+        "🌐 Using API server (uploaded images are processed for this search)"
+        if use_server
+        else "💻 Using local database"
+    )
+    uploaded = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"], key="image_upload")
     if uploaded is None:
         for key in ("query", "query_key", "selected_face", "search_results"):
             st.session_state.pop(key, None)
@@ -164,24 +182,25 @@ def main():
             query["image"] = image
             st.session_state.query = query
             st.session_state.query_key = key
-            st.session_state.selected_face = 0
+            st.session_state.selected_face = 0 if query.get("face_count", 0) <= 1 else None
             st.session_state.search_results = {0: query["legacy_response"]} if "legacy_response" in query else {}
         query = st.session_state.query
         count = query.get("face_count", 0)
-        st.image(draw_face_boxes(query["image"], query.get("face_locations", [])), use_container_width=True)
+        caption = f"Uploaded image - {count} face(s) detected" if count else "Uploaded image - No faces detected"
+        st.image(draw_face_boxes(query["image"], query.get("face_locations", [])), caption=caption, width="stretch")
         if not count:
-            st.warning("No face detected in the image.")
+            st.warning("❌ No face detected in the image.")
             return
         if count > 1:
-            st.write("Select a face to search:")
-            columns = st.columns(min(count, 4))
-            for i, (top, right, bottom, left) in enumerate(query["face_locations"]):
-                with columns[i % len(columns)]:
-                    st.image(query["image"][top:bottom, left:right], width=100)
+            st.info(f"🔍 Found {count} faces in the image. Select which face to search for:")
+            for i, column in enumerate(st.columns(count)):
+                with column:
                     if st.button(f"Search Face {i + 1}", key=f"face_{i}"):
                         st.session_state.selected_face = i
         selected = st.session_state.selected_face
-        st.write(f"Results for Face {selected + 1}")
+        if selected is None:
+            return
+        st.info(f"🔎 Searching for Face {selected + 1}..." if count > 1 else "🔎 Searching for similar faces...")
         if selected not in st.session_state.search_results:
             with st.spinner("Searching..."):
                 if use_server and "encodings" in query:
@@ -209,7 +228,7 @@ def main():
                     )
                     response = {"matches": matches}
                 st.session_state.search_results[selected] = response
-        render_results(st.session_state.search_results[selected])
+        render_results(st.session_state.search_results[selected], use_server)
     except (requests.RequestException, ValueError, OSError, RuntimeError) as exc:
         st.error(f"Search failed: {exc}")
 

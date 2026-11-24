@@ -57,10 +57,15 @@ def test_selecting_another_face_does_not_repeat_analysis(monkeypatch):
     ):
         app = AppTest.from_file("main.py", default_timeout=15).run()
         assert not app.exception
+        assert app.title[0].value == "🔍 Face Search"
+        assert app.session_state.selected_face is None
+        assert sum(url.endswith("search") for url in calls) == 0
         app.button(key="face_1").click().run()
         assert not app.exception
         assert app.session_state.selected_face == 1
         assert sum(url.endswith("analyze") for url in calls) == 1
-        assert sum(url.endswith("search") for url in calls) == 2
+        assert sum(url.endswith("search") for url in calls) == 1
         app.button(key="face_0").click().run()
+        assert sum(url.endswith("search") for url in calls) == 2
+        app.button(key="face_1").click().run()
         assert sum(url.endswith("search") for url in calls) == 2

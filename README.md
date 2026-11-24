@@ -92,6 +92,38 @@ Each worker owns its own search snapshot; a reload affects the receiving worker.
 Use one worker, restart all workers together, or coordinate reloads externally.
 Terminate HTTPS at the deployment proxy. The development command does not enable HTTPS.
 
+To serve the current crawl while Wikipedia discovery is still running, configure
+a snapshot directory on the API server. Create that directory and give the
+crawler's SSH account write access and the API process read access. Install `rsync`
+on both hosts. From the crawler host, verify that `ssh -o BatchMode=yes USER@SERVER true`
+works with the server host key already trusted. Set the following on the API host:
+
+```dotenv
+SERVER_BACKEND=sqlite
+SERVER_CRAWLER_SNAPSHOTS=/home/USER/face-search/crawler-snapshots
+```
+
+Set this separately on the Raspberry Pi, in the `.env` used by the crawler:
+
+```dotenv
+CRAWLER_SNAPSHOT_TARGET=USER@SERVER:/home/USER/face-search/crawler-snapshots/
+```
+
+Restart the API and resume the Wikipedia crawler normally. Verified startup and
+periodic backups replace `crawler-daily.db` on the server. When a full category
+pass ends in one-pass mode, the crawler creates and sends a fresh, complete SQLite
+copy as `crawler-final.db`, including all committed changes. `--page`, early exits
+and interrupted runs do not publish a final copy. Delayed retries stay queued.
+Rsync stages each file before replacing it. If the final transfer fails, fix the
+connection and restart the crawler to retry from the saved category state.
+
+The API checks for updates every 30 seconds and keeps the previous usable index if
+a reload fails. `/health` reports `database_source` as `crawler-daily` or `crawler-final`.
+The final copy takes precedence even after an API restart. Use a separate snapshot
+directory if starting a new independent crawl with its own daily and final copies.
+With `SERVER_CRAWLER_SNAPSHOTS` configured, the API waits for those files. Without
+it, the existing `DATABASE_PATH` configuration continues to select the database.
+
 The API refuses to start without a token unless `ALLOW_UNAUTHENTICATED=1` is
 explicitly set. The development runner then binds to localhost. Never expose an
 unauthenticated ASGI deployment publicly.
@@ -222,8 +254,8 @@ conda activate face-search2
 python crawler/crawler_wiki.py
 # Bounded test run, using a NEW database:
 python crawler/crawler_wiki.py --page "Albert Einstein" --database crawl-test.db
-# One category pass, or a bounded number of article discoveries:
-python crawler/crawler_wiki.py --once
+# Repeat category scans, or stop after a bounded number of article discoveries:
+python crawler/crawler_wiki.py --continuous
 python crawler/crawler_wiki.py --max-articles 20
 # Other sources also write SQLite:
 python crawler/crawler_url.py https://example.org/ --max-pages 100
@@ -247,10 +279,12 @@ and additional-file metadata cursors, but never walks upload history. Genuine
 pagination loops or partial metadata failures keep the article queued for retry.
 Category cursors and article jobs are committed together;
 image jobs survive article completion and failed downloads receive persistent,
-exponentially delayed retries (up to one day between attempts). `--once` processes
-the category pass and currently due jobs; future retries stay queued for the next
-run. Without `--once`, retries are checked every 30 seconds and discovery repeats
-every 24 hours by default. `--page` runs finish after the selected articles.
+exponentially delayed retries (up to one day between attempts). By default, the
+crawler resumes the saved category pass, processes currently due jobs and exits
+when the API has no more category members. Future retries stay queued for the
+next run. `--once` explicitly selects this default. With `--continuous`, retries
+are checked every 30 seconds while idle and discovery repeats every 24 hours by
+default. `--page` runs finish after the selected articles.
 While category discovery is active, queued new articles are processed first,
 with at most one older article retry per round. At the end of the pass, remaining
 currently due article retries are drained in batches. Retry logs explicitly say
@@ -292,9 +326,18 @@ latest-index selector. A source article is provenance, not a verified identity l
 
 Before the first write to an existing SQLite database, the crawler creates a unique,
 integrity-checked backup, including WAL contents. New queue tables are additive.
+After a successful startup or periodic backup, it retains only the newly verified
+snapshot and removes older automatically named snapshots for that exact database
+(`DATABASE.backup-YYYYMMDDTHHMMSSffffffZ-xxxxxxxx`). This also cleans up backups from
+older crawler versions. Since maintenance tools use the same naming scheme, their
+snapshots for that database count toward this retention policy too; custom-named
+archives and backups of other databases are left alone.
 Periodic backups require new face/provenance writes and elapsed time (24h by default),
-not a count of reused images. Insufficient disk space stops the crawler; it never
-deletes databases or old backups. Ctrl+C requests a graceful stop; unfinished jobs
+not a count of reused images. Creating the replacement temporarily needs space for
+one additional database copy. A failed backup or insufficient free space stops the
+crawler and preserves existing snapshots; old backups are never deleted to make
+room before verification succeeds. Cleanup errors stop the crawler with the verified
+replacement retained. No active database is deleted. Ctrl+C requests a graceful stop; unfinished jobs
 remain pending. After a hard stop, committed transactions and queued work remain.
 
 Tune `CRAWLER_DOWNLOAD_WORKERS`, `CRAWLER_PREVIEW_WIDTH`, `CRAWLER_REQUEST_INTERVAL`,
@@ -324,7 +367,8 @@ Use a descriptive `USER_AGENT` with your contact/project information.
 The HTTP client trusts the operating system's CA roots as well as Requests' CA bundle,
 including managed Windows roots, and keeps certificate/hostname verification enabled.
 An explicit `REQUESTS_CA_BUNDLE` remains authoritative if your network needs a custom CA.
-Server snapshots refresh via `/reload` or restart; the crawler does not reload them.
+The API reloads published crawler snapshots automatically when configured. Fixed
+`DATABASE_PATH` deployments refresh the search index via `/reload` or restart.
 
 ## Models and evaluation
 

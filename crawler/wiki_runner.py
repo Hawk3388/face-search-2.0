@@ -185,7 +185,7 @@ class Crawler:
             for future in pending:
                 future.cancel()
 
-    def run(self, category, once=False, max_articles=0, refresh_seconds=86400, pages=None):
+    def run(self, category, once=True, max_articles=0, refresh_seconds=86400, pages=None):
         scope = json.dumps([self.api.wiki, category, pages or [], self.profile])
         count, started = 0, time.monotonic()
         if not pages and self.store.scan(scope)["cursor"]:
@@ -236,6 +236,10 @@ class Crawler:
                         raise ValueError("Category API returned the same continuation token")
                     self.store.enqueue_batch(scope, members, next_cursor, refresh_seconds)
                 elif once or pages:
+                    # Article retries can take long enough for image retries to become due.
+                    self.process_images(pool)
+                    if not pages and not self.stop.is_set():
+                        self.store.publish_final()
                     break
                 elif time.time() >= scan["next_scan"]:
                     self.store.restart_scan(scope)
@@ -257,7 +261,12 @@ def main(argv=None):
     parser.add_argument("--wiki", default="https://en.wikipedia.org")
     parser.add_argument("--category", default="Category:Living people")
     parser.add_argument("--page", action="append", help="Article title; repeat for up to 50 titles")
-    parser.add_argument("--once", action="store_true", help="One discovery pass; delayed retries remain queued")
+    scan_mode = parser.add_mutually_exclusive_group()
+    scan_mode.add_argument("--once", dest="once", action="store_true", help="Stop after one category pass (default)")
+    scan_mode.add_argument(
+        "--continuous", dest="once", action="store_false", help="Repeat the scan after each refresh interval"
+    )
+    parser.set_defaults(once=True)
     parser.add_argument("--max-articles", type=int, default=0, help="Stop after N successful article discoveries")
     parser.add_argument("--workers", type=int)
     args = parser.parse_args(argv)
@@ -291,7 +300,12 @@ def main(argv=None):
     store = None
     try:
         encoder = FaceEncoder(settings)
-        store = CrawlStore(database, free_mb * 1024 * 1024, backup_hours)
+        store = CrawlStore(
+            database,
+            free_mb * 1024 * 1024,
+            backup_hours,
+            snapshot_target=os.getenv("CRAWLER_SNAPSHOT_TARGET"),
+        )
         LOG.info(
             "SQLite: %s; %d download workers; preview %dpx; num_jitters=%d",
             database,
