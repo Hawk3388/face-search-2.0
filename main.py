@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from face_search.config import Settings
 from face_search.encoding import FaceEncoder, load_image
+from face_search.people import suggest_person, wikipedia_people
 from face_search.search import SearchIndex
 from face_search.storage import read_records
 
@@ -83,6 +84,11 @@ def api_call(api_url, token, endpoint, **kwargs):
         return data
 
 
+@st.cache_data(ttl=86400, max_entries=256, show_spinner=False)
+def cached_wikipedia_people(articles):
+    return wikipedia_people(articles)
+
+
 def render_results(response, use_server):
     matches = [
         match
@@ -92,6 +98,19 @@ def render_results(response, use_server):
     if not matches:
         st.error("😕 No similar faces found.")
         return
+    try:
+        suggestion = suggest_person(
+            (match[0] if isinstance(match, (list, tuple)) else match for match in matches),
+            lookup=cached_wikipedia_people,
+        )
+    except (requests.RequestException, ValueError, KeyError):
+        suggestion = None
+    if suggestion:
+        name, support = suggestion
+        name = name.replace("\\", "\\\\")
+        for char in "`*_{}[]<>|":
+            name = name.replace(char, "\\" + char)
+        st.info(f"Possible name: **{name}** · {support} matching images from Wikipedia. This is a suggestion.")
     st.success(f"✅ {len(matches)} matches found!")
     for position, match in enumerate(matches):
         if position:
